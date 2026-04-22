@@ -1,0 +1,42 @@
+{
+  "name": "sptmChart",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/sptmChart.js",
+  "module": "dist/sptmChart.esm.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "babel": "babel src -d lib",
+    "minify": "terser lib/sptmChart.js -o lib/sptmChart.min.js",
+    "build": "rollup -c",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@babel/cli": "^7.25.6",
+    "@babel/core": "^7.25.2",
+    "@babel/preset-env": "^7.25.4",
+    "@babel/preset-react": "^7.24.7",
+    "@babel/preset-typescript": "^7.24.7",
+    "@rollup/plugin-babel": "^6.0.4",
+    "@rollup/plugin-commonjs": "^26.0.1",
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@rollup/plugin-typescript": "^12.1.0",
+    "babel-loader": "^9.1.3",
+    "rollup": "^2.79.1",
+    "rollup-plugin-postcss": "^4.0.2",
+    "rollup-plugin-terser": "^7.0.2",
+    "terser": "^5.32.0",
+    "typescript": "^5.6.2"
+  },
+  "dependencies": {
+    "ol": "^5.3.3",
+    "tslib": "^2.7.0",
+    "undici": "^6.19.8"
+  },
+  "peerDependencies": {
+    "ol": "^5.3.3"
+  }
+}

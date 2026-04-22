@@ -1,0 +1,23 @@
+/* src/index.css */
+.popup {
+  background-color: white;
+  border: 1px solid black;
+  padding: 5px;
+  border-radius: 3px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+}
+#mycanvas{
+  border: 1px solid #ddd;
+}
+
+/*门限图标样式*/
+.sptmchart_threshold{
+  opacity:0.6;
+}
+/*强度信息*/
+.sptmchart_freqtip{
+  display: inline-block;
+  font-size: 14px;
+  top:0px;
+  white-space: nowrap;
+}

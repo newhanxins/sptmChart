@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>chart Example</title>
+  <!-- <link rel="stylesheet" href="../dist/my-openlayers-wrapper.css"> 引入提取的 CSS -->
+  <link rel="stylesheet" href="../dist/sptmChart.css"> <!-- 引入自定义的 CSS -->
+  <style>
+    #mycanvas {
+      margin: 0;
+      width: 100%;
+      height: 600px;
+    }
+  </style>
+</head>
+<body>
+  <div id="mycanvas" style="color: rebeccapurple;"></div>
+  <p><button onclick="changeProperty()">更改门限属性</button>
+    <button onclick="changeOptions()">更改属性</button><button onclick="stop()">停止</button></p>
+
+  <div id="tip"></div>
+  <canvas id="myCanvass" width="500" height="500"></canvas>
+  <!-- 引入你的编译库 -->
+  <script src="../dist/sptmChart.js"></script>
+   <!-- <script src="../dist/sptmChart.esm.js"></script> -->
+  <!-- <script src="../lib/sptmChart.js"></script> -->
+  <script>
+    // 使用你的库
+    // document.addEventListener('DOMContentLoaded', function() {
+    //   // 确保库加载完毕后执行
+    //   console.log('DOM fully loaded and parsed',window.sptmChart);
+    //   setTimeout(() => {
+    //     let sptmChart = new sptmChart("mycanvas",{});
+    //     console.log(sptmChart.getOptions());
+    //   }, 2000);
+    // });
+    let sptmCharts=""
+    window.onload = function() {
+      let options={
+        "background":"#fff",
+        "type":"FFT",//FFT DScan
+        "duration": 50,
+        "width":'100%',//画布宽度
+        "height": '100%',//画布高度
+        "center_freq":200000000,
+        "span":2000000,
+        "grid":{
+          "width":1,
+          "color":"#B7B7B7",
+          "xgrid_line_dash":[15,5]
+        },
+        "xaxis":{
+          "width":1,
+          "unit":"MHz",
+          "decimals":4,
+          "color":"#333",
+          "label_angle":30,//X轴标签倾斜角度
+          "dscan_freq":[//DScan模式下的频率范围 [起始频率，结束频率] 传入多个范围时，则分段显示
+            {
+              "start_freq": 20000000,//X轴起始频率
+              "end_freq": 1000000000,//X轴结束频率
+              "width":1,//X轴线宽度 1多条时等比宽度
+            },
+            {
+              "start_freq": 1200000000,//X轴起始频率
+              "end_freq": 2000000000,//X轴结束频率
+              "width":1,//X轴线宽度 1多条时等比宽度
+            }
+          ],
+          "dscan_space": 10,//DScan模式下的频段间隔像素
+        },
+        "yaxis":{
+          "width":1,
+          "unit":"dBμV",
+          "color":"black",
+          "min_value":-20,
+          "max_value":20,
+          "number":5,
+          "floor_value": -20,//Y轴最小值范围
+        "ceiling_value": 100,//Y轴最大值范围
+          "decimals":2,//小数位数
+          //"axis_function":function(value){return value-107}
+        },
+        "legend":{
+          "visible": true,//是否显示图例
+        },
+        "threshold":{ //门限样式
+          "visible": false,//是否显示门限
+          "is_darg":true,//是否可以拖拽门限
+          "level": 36,//门限强度值 dbuv
+          "icon_size": [28,48],//门限图标大小
+          "icon_url":"../images/threshold_slider.png",//门限图标地址
+          "drag_icon_url":"../images/threshold_slider_drag.png"//门限拖拽图标地址
+        },
+        "level_tipline":{//移动鼠标频谱值提示
+          "visible": true,
+          "freq_visible":true,//是否显示频率
+          "color": "#00afff",//谱值提示线颜色
+          "width": 1,//谱值提示线宽度
+        }
+      }
+      sptmCharts = new sptmChart("mycanvas",options);
+      
+      let datas={
+        "id":1,
+        "type":"FFT",
+        "visibility":true,
+        "point":1600,
+        "name":"Trace1",
+        "color":"green",
+        "width":1,
+        "datainfo":[
+          {
+            "point":1032,
+            "center_freq":200000000,
+            "span":312,
+            "data":generateNumbersWithDominantMiddle(1032, -20, 58),
+          }
+        ]
+      }
+      //sptmCharts.addTrace(datas)
+      let datas3={
+        "id":3,
+        "type":"FFT",
+        "visibility":true,
+        "point":1600,
+        "name":"Trace3",
+        "color":"blue",
+        "width":1,
+        "datainfo":[
+          {
+            "point":1032,
+            "center_freq":200000000,
+            "span":312,
+            "data":generateNumbersWithDominantMiddle(1032, -20, 58),
+          }
+        ]
+      }
+     sptmCharts.addTrace(datas3)
+      let datass={
+        "id":2,
+        "type":"DScan",
+        "visibility":true,
+        "point":100,
+        "name":"Trace2",
+        "color":"#ff0000",
+        "width":1,
+        "datainfo":[
+          {
+            "point":1600,
+            "step":200000000,
+            "start_freq":200000000,
+            "end_freq":2000000000,
+            "width":1,
+            "data":generateNumbersWithDominantMiddle(1600, -20, 100),
+          },
+          {
+            "point":1600,
+            "step":200000000,
+            "start_freq":6000000000,
+            "end_freq":9000000000,
+            "width":1,
+            "data":generateNumbersWithDominantMiddle(1600, -20, 100),
+          }
+        ]
+        
+      }
+      //sptmCharts.addTrace(datass)
+
+
+      setInterval(function() {
+        let datas=[
+          {
+            "point":1032,
+            "center_freq":200000000,
+            "span":100,
+            "data":generateNumbersWithDominantMiddle(1032, -20, 58),
+          }
+        ]
+        
+        //sptmCharts.setTraceData(1,datas)
+        let datass=[
+          {
+            "point":1032,
+            "center_freq":200000000,
+            "span":100,
+            "data":generateNumbersWithDominantMiddle(1032, -6, 5),
+          }
+        ]
+        //sptmCharts.setTraceData(3,datass)
+
+        let datainfo=[
+          {
+            "point":1600,
+            "step":200000000,
+            "start_freq":200000000,
+            "end_freq":1000000000,
+            "width":1,
+            "data":generateNumbersWithDominantMiddle(1600, -20, 100),
+          },
+          {
+            "point":2000,
+            "step":200000000,
+            "start_freq":1200000000,
+            "end_freq":2000000000,
+            "width":1,
+            "data":generateNumbersWithDominantMiddle(2000, -20, 60),
+          }
+        ]
+        //sptmCharts.setTraceData(2,datainfo)
+      },50)
+      
+      console.log(sptmCharts.getOptions());
+
+
+
+
+
+
+
+
+      
+
+
+
+
+
+    };
+    function stop(){
+      sptmCharts.stopChart()
+    }
+
+function generateNumbersWithDominantMiddle(count, min, max) {
+    const numbers = [];
+    // 生成 count-20 个随机数字，留出空间给中间的10个数字
+    for (let i = 0; i < count - 21; i++) {
+        const randomNumber = Math.floor(Math.random() * (max-20 - min + 1)) + min;
+        numbers.push(randomNumber);
+    }
+
+    // 生成中间的10个数字，使它们都比之前的数字大
+    const middleNumbers = [];
+    const dominantValue = Math.max(...numbers) + 5; // 确保中间数字更大
+    for (let i = 0; i < 20; i++) {
+        middleNumbers.push(dominantValue + Math.floor(Math.random() * 10)); // 小幅度增加
+    }
+
+    // 将中间数字插入到数组中
+    const insertIndex = Math.floor(count / 2) - 10; // 中间位置
+    numbers.splice(insertIndex, 0, ...middleNumbers); // 插入中间的10个数字
+    // 计算中位数的位置
+    const medianIndex = Math.floor(count / 2);
+    const maxNumber = Math.max(...numbers)+5
+    numbers.splice(medianIndex, 0, maxNumber);
+    return numbers;
+}
+function changeProperty(){
+          sptmCharts.setThresholdAttribute({
+            "visible": true,//是否显示门限
+            "is_darg":true,//是否可以拖拽门限
+          })
+      }
+
+
+function changeOptions(){
+  let options = {
+    "xaxis":{
+          "dscan_freq":[//DScan模式下的频率范围 [起始频率，结束频率] 传入多个范围时，则分段显示
+            {
+              "start_freq": 200000000,//X轴起始频率
+              "end_freq": 5000000000,//X轴结束频率
+              "width":1,//X轴线宽度 1多条时等比宽度
+            },
+            {
+              "start_freq": 6000000000,//X轴起始频率
+              "end_freq": 9000000000,//X轴结束频率
+              "width":1,//X轴线宽度 1多条时等比宽度
+            }
+          ]
+        },
+    "level_tipline":{//移动鼠标频谱值提示
+      "visible": true,//是否显示频谱值
+      "color": "#00afff",//谱值提示线颜色
+      "width": 1,//谱值提示线宽度
+    }
+  }
+  sptmCharts.setOptions(options)
+}
+
+  </script>
+  
+</body>
+</html>
