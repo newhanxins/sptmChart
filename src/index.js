@@ -1,5 +1,7 @@
 import './index.css'
 import {deepMerge,deepCopy,calculateStepValues,calculateWidths,truncateNumber} from './utils'
+import { MarkerItem } from './module/MarkerItem.js'
+
 /**
  * sptmChart 频谱控件
  *
@@ -26,20 +28,22 @@ class sptmChart {
     this.thresholdFouce=false;
     //弹窗tip强度
     this.fretipDiv=null;
-    // if (window.devicePixelRatio) {
-    //   this.canvas.style.width = this.width + "px";
-    //   this.canvas.style.height = this.height + "px";
-    //   this.canvas.height = this.height * window.devicePixelRatio;
-    //   this.canvas.width = this.width * window.devicePixelRatio;
-    //   this.ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-    // }
+    this.ceiling_value=null//y轴最大门限值
+    //========== Marker相关初始化 ==========
+    this._markerList=new Map();        // Marker列表 Map<id, MarkerItem>
+    this._nextMarkerId=1;              // 下一个Marker ID
+    this._focusMarkerId=0;             // 当前焦点Marker ID
+    this._markerDragState={             // Marker拖动状态
+      isDragging:false,
+      dragMarkerId:0,
+      lastX:0,
+      lastY:0
+    };
+    //=====================================
+    
     this.chartWidth = 0;//图表宽度
     this.chartHeight = 0;//图表高度
-    // this.yLabelGridInfo={}//y轴标签网格信息
-    // this.xLabelGridInfo=[]//x轴标签网格信息
     this.ygridStep=0//图表网格步进宽度
-    // this.zoomMax=10//缩放最大值
-    // this.zoomMin=1//缩放最小值
     this.yZoom=1//y轴缩放比例
     this.tracesData=[];//数据
     this.focusType="";//聚焦类型 grid|left|right|bottom|threshold|marker
@@ -80,28 +84,449 @@ class sptmChart {
     this.initthreshold();
     //初始化提示框
     this.initFredTip();
+    
+    //根据配置初始化Marker
+    if(this.options.marker?.visible!==false && this.options.marker?.autoAdd!==false){
+      const defaultCount=this.options.marker?.defaultCount||0;
+      for(let i=0;i<defaultCount;i++){
+        this.addMarker(true,i===defaultCount-1);
+      }
+    }
   }
+  
+  /**
+   * 频率转X坐标
+   * @private
+   */
+  _freqToX(freq){
+    if(!this.xLabelGridInfo||this.xLabelGridInfo.length===0)return null;
+    
+    for(let i=0;i<this.xLabelGridInfo.length;i++){
+      const info=this.xLabelGridInfo[i];
+      if(freq>=info.show_start_freq && freq<=info.show_end_freq){
+        const ratio=(freq-info.show_start_freq)/(info.show_end_freq-info.show_start_freq);
+        return this.options.grid.left+info.start_x+ratio*info.width;
+      }
+    }
+    return null;
+  }
+  
+  /**
+   * X坐标转频率
+   * @private
+   */
+  _xToFreq(x){
+    if(!this.xLabelGridInfo||this.xLabelGridInfo.length===0)return null;
+    
+    const relativeX=x-this.options.grid.left;
+    
+    for(let i=0;i<this.xLabelGridInfo.length;i++){
+      const info=this.xLabelGridInfo[i];
+      if(relativeX>=info.start_x && relativeX<=info.end_x){
+        const ratio=(relativeX-info.start_x)/info.width;
+        return info.show_start_freq+ratio*(info.show_end_freq-info.show_start_freq);
+      }
+    }
+    return null;
+  }
+  
+  /**
+   * 更新Marker场景矩形
+   * @private
+   */
+  _updateMarkerSceneRect(){
+    const sceneRect={
+      x:this.options.grid.left,
+      y:this.options.grid.top,
+      width:this.chartWidth,
+      height:this.chartHeight
+    };
+    
+    this._markerList.forEach(marker=>{
+      marker.setRect(sceneRect);
+    });
+  }
+  
+    /**
+   * 更新 Marker 数据
+   * @private
+   */
+  _updateMarkerDatas(marker){
+    const pt=marker.markerPt();
+    const freq=this._xToFreq(pt.x);
+    
+    if(freq===null)return;
+    
+    const traceLevels=[];
+    let targetY=null;
+    let targetTraceIndex = -1;  // 目标谱线索引
+    
+    // 获取 Marker 跟随的谱线 ID
+    const followTraceId = marker.getTraceId() || 0;
+    
+    // 第一次遍历：找到目标谱线的数据
+    for(let i=0;i<this.tracesData.length;i++){
+      const trace=this.tracesData[i];
+      if(!trace.visible||!trace.datainfo)continue;
+      
+      // 如果指定了谱线 ID，只处理该谱线
+      //if(followTraceId > 0 && trace.id !== followTraceId)continue;
+      
+      for(let j=0;j<this.xLabelGridInfo.length;j++){
+        const info=this.xLabelGridInfo[j];
+        if(freq<info.show_start_freq||freq>info.show_end_freq)continue;
+        
+        const dataInfo=trace.datainfo[j];
+        if(!dataInfo||!dataInfo.data)continue;
+        
+        const ratio=(freq-info.start_freq)/(info.end_freq-info.start_freq);
+        const index=Math.round(ratio*(dataInfo.data.length-1));
+        
+        if(index>=0&&index<dataInfo.data.length){
+          const level=dataInfo.data[index];
+          const traceInfo = {
+            name:trace.name||`谱线${i+1}`,
+            level:level,
+            unit:this.options.yaxis.unit||'dBμV',
+            traceId: trace.id,
+            originalIndex: i  // 原始索引
+          };
+          
+          // 如果是指定谱线，记录为目标谱线
+          if(followTraceId > 0 && trace.id === followTraceId){
+            targetTraceIndex = traceLevels.length;
+          }
+          
+          traceLevels.push(traceInfo);
+          
+          // 计算谱线 Y 轴坐标
+          if(targetY===null && marker.isFollowTraceY()){
+            const yPixel=this.height - this.options.grid.bottom - ((level - this.options.yaxis.min_value) /(this.options.yaxis.max_value - this.options.yaxis.min_value)) * this.chartHeight;
+            targetY=yPixel+marker.getTraceYOffset();
+          }
+        }
+      }
+    }
+    
+    marker.setFrequency(freq);
+    
+    //构建标牌文本
+    const scutchonList=[];
+    const freqMHz=(freq/1000000).toFixed(6);
+    scutchonList.push([{text:`频率：${freqMHz} MHz`,format:''}]);
+    
+    // 如果有目标谱线，将其移到最前面
+    if(targetTraceIndex >= 0 && targetTraceIndex < traceLevels.length){
+      const targetTrace = traceLevels[targetTraceIndex];
+      // 将目标谱线移到数组第一位
+      traceLevels.unshift(traceLevels.splice(targetTraceIndex, 1)[0]);
+    }
+    
+    // 构建标牌内容
+    traceLevels.forEach((trace,index)=>{
+      const levelText=trace.level!==undefined?trace.level.toFixed(2):'--';
+      const lineText = `${trace.name}: ${levelText} ${trace.unit}`;
+      
+      scutchonList.push([{
+        text:lineText,
+        format:''
+      }]);
+    });
+    
+    marker.setScutchonList(scutchonList);
+    
+    // 如果跟随谱线 Y 轴位置，更新 Marker 的 Y 坐标
+    if(targetY!==null && marker.isFollowTraceY()){
+      const currentPt=marker.markerPt();
+      if(currentPt.y!==targetY){
+        marker.setMarkerPt({x:currentPt.x,y:targetY});
+      }
+    }
+  }
+
+    /**
+   * 更新 Marker 数据
+   * @private
+   */
+  _updateMarkerData(marker){
+    const pt=marker.markerPt();
+    const freq=this._xToFreq(pt.x);
+    
+    if(freq===null)return;
+    
+    const traceLevels=[];
+    let targetY=null;
+    let targetTraceIndex = -1;  // 目标谱线索引
+    
+    // 获取 Marker 跟随的谱线 ID
+    const followTraceId = marker.getTraceId() || 0;
+    
+    // 遍历所有谱线，收集数据
+    for(let i=0;i<this.tracesData.length;i++){
+      const trace=this.tracesData[i];
+      if(!trace.visible||!trace.datainfo)continue;
+      
+      for(let j=0;j<this.xLabelGridInfo.length;j++){
+        const info=this.xLabelGridInfo[j];
+        if(freq<info.show_start_freq||freq>info.show_end_freq)continue;
+        
+        const dataInfo=trace.datainfo[j];
+        if(!dataInfo||!dataInfo.data)continue;
+        
+        const ratio=(freq-info.start_freq)/(info.end_freq-info.start_freq);
+        const index=Math.round(ratio*(dataInfo.data.length-1));
+        
+        if(index>=0&&index<dataInfo.data.length){
+          const level=dataInfo.data[index];
+          const traceInfo = {
+            name:trace.name||`谱线${i+1}`,
+            level:level,
+            unit:this.options.yaxis.unit||'dBμV',
+            traceId: trace.id,
+            originalIndex: i  // 原始索引
+          };
+          
+          // 如果是指定谱线，记录为目标谱线
+          if(followTraceId > 0 && trace.id === followTraceId){
+            targetTraceIndex = traceLevels.length;
+          }
+          
+          traceLevels.push(traceInfo);
+          
+          // 计算谱线 Y 轴坐标（只使用目标谱线或第一条谱线）
+          if(targetY===null && marker.isFollowTraceY()){
+            // 如果指定了谱线 ID，只在遍历到目标谱线时计算 Y 坐标
+            // 如果没有指定，则使用第一条谱线
+            if(followTraceId === 0 || trace.id === followTraceId){
+              const yPixel=this.height - this.options.grid.bottom - ((level - this.options.yaxis.min_value) /(this.options.yaxis.max_value - this.options.yaxis.min_value)) * this.chartHeight;
+              targetY=yPixel+marker.getTraceYOffset();
+            }
+          }
+        }
+      }
+    }
+    
+    marker.setFrequency(freq);
+    
+    //构建标牌文本
+    const scutchonList=[];
+    const freqMHz=(freq/1000000).toFixed(6);
+    scutchonList.push([{text:`频率：${freqMHz} MHz`,format:''}]);
+    
+    // 如果有目标谱线，将其移到最前面
+    if(targetTraceIndex >= 0 && targetTraceIndex < traceLevels.length){
+      const targetTrace = traceLevels[targetTraceIndex];
+      // 将目标谱线移到数组第一位
+      traceLevels.unshift(traceLevels.splice(targetTraceIndex, 1)[0]);
+    }
+    
+    // 构建标牌内容
+    traceLevels.forEach((trace,index)=>{
+      const levelText=trace.level!==undefined?trace.level.toFixed(2):'--';
+      const lineText = `${trace.name}: ${levelText} ${trace.unit}`;
+      
+      scutchonList.push([{
+        text:lineText,
+        format:''
+      }]);
+    });
+    
+    marker.setScutchonList(scutchonList);
+    
+    // 如果跟随谱线 Y 轴位置，更新 Marker 的 Y 坐标
+    if(targetY!==null && marker.isFollowTraceY()){
+      const currentPt=marker.markerPt();
+      if(currentPt.y!==targetY){
+        marker.setMarkerPt({x:currentPt.x,y:targetY});
+      }
+    }
+  }
+
+  
+  /**
+   * 绘制Markers
+   * @private
+   */
+  _drawMarkers(){
+    if(this.options.marker?.visible===false)return;
+    
+    this._updateMarkerSceneRect();
+    
+    //更新所有Marker数据
+    this._markerList.forEach(marker=>{
+      if(marker.isVisible()){
+        this._updateMarkerData(marker);
+      }
+    });
+    
+    const dpiPair={x:96*this.devicePixelRatio,y:96*this.devicePixelRatio};
+    const fontPixelPair={min:10,max:16};
+    
+    // 将 Marker 分为两组：无焦点的和有焦点的
+    const markersWithoutFocus = [];
+    let focusedMarker = null;
+
+    //先绘制所有Marker的线
+    this._markerList.forEach(marker=>{
+      if(marker.isVisible()){
+        if(marker.hasFocus()){
+          focusedMarker = marker;
+        }else{
+          markersWithoutFocus.push(marker);
+        }
+      }
+    });
+    
+    // 1. 先绘制所有无焦点 Marker 的线
+    markersWithoutFocus.forEach(marker=>{
+      marker.paintLine(this.ctx);
+    });
+    
+    // 2. 绘制有焦点 Marker 的线（如果存在）
+    if(focusedMarker){
+      focusedMarker.paintLine(this.ctx);
+    }
+    
+    // 3. 再绘制所有无焦点 Marker 的图标和标牌
+    markersWithoutFocus.forEach(marker=>{
+      marker.paint(this.ctx,dpiPair,fontPixelPair,false);
+    });
+    
+    // 4. 最后绘制有焦点 Marker 的图标和标牌（确保在最上层）
+    if(focusedMarker){
+      focusedMarker.paint(this.ctx,dpiPair,fontPixelPair,true);
+    }
+  }
+  
+  /**
+   * 处理Marker点击
+   * @private
+   */
+  _handleMarkerClick(point){
+    const dpiPair={x:96*this.devicePixelRatio,y:96*this.devicePixelRatio};
+    
+     // 优先检查有焦点的 Marker（如果在重叠区域，优先选中上层的）
+    if(this._focusMarkerId > 0){
+      const focusedMarker = this._markerList.get(this._focusMarkerId);
+      if(focusedMarker && focusedMarker.isVisible() && focusedMarker.containsPoint(point,dpiPair)){
+        return true; // 已经点击了有焦点的 Marker，不需要改变
+      }
+    }
+    
+    // 然后检查其他 Marker
+    for(const [id,marker] of this._markerList){
+      if(id === this._focusMarkerId)continue; // 跳过已检查的焦点 Marker
+      if(marker.isVisible() && marker.containsPoint(point,dpiPair)){
+        this.setMarkerFocus(id);
+        return true;
+      }
+    }
+    
+    return false;
+  }
+  
+  /**
+   * 移动焦点 Marker 到指定点
+   * @private
+   */
+  _moveFocusMarkerToPoint(point){
+    const focusId=this._focusMarkerId;
+    if(focusId===0)return;
+    
+    const marker=this._markerList.get(focusId);
+    if(!marker)return;
+    
+    const clampedX=Math.max(this.options.grid.left,Math.min(this.width-this.options.grid.right,point.x));
+    const clampedY=Math.max(this.options.grid.top,Math.min(this.height-this.options.grid.bottom,point.y));
+    
+    marker.setMarkerPt({x:clampedX,y:clampedY});
+    marker.setScutchonAnchor({x:clampedX,y:clampedY});
+    this._updateMarkerData(marker);
+    
+    this.draw();
+  }
+
+  /**
+   * 更新所有 Marker 的位置（当频率范围改变时调用）
+   * @private
+   */
+  _updateMarkersPositionByFreq(){
+    this._markerList.forEach(marker=>{
+      if(!marker.isVisible())return;
+      
+      const freq=marker.getFrequency();
+      if(freq<=0)return;
+      
+      // 根据频率重新计算 X 坐标
+      const newX=this._freqToX(freq);
+      if(newX===null)return;
+      
+      const currentPt=marker.markerPt();
+      let newY=currentPt.y;
+      
+      // 如果跟随谱线 Y 轴位置，重新计算 Y 坐标
+      if(marker.isFollowTraceY()){
+        const traceLevels=[];
+        for(let i=0;i<this.tracesData.length;i++){
+          const trace=this.tracesData[i];
+          if(!trace.visible||!trace.datainfo)continue;
+          
+          for(let j=0;j<this.xLabelGridInfo.length;j++){
+            const info=this.xLabelGridInfo[j];
+            if(freq<info.show_start_freq||freq>info.show_end_freq)continue;
+            
+            const dataInfo=trace.datainfo[j];
+            if(!dataInfo||!dataInfo.data)continue;
+            
+            const ratio=(freq-info.start_freq)/(info.end_freq-info.start_freq);
+            const index=Math.round(ratio*(dataInfo.data.length-1));
+            
+            if(index>=0&&index<dataInfo.data.length){
+              const level=dataInfo.data[index];
+              newY=this.height - this.options.grid.bottom - ((level - this.options.yaxis.min_value) /(this.options.yaxis.max_value - this.options.yaxis.min_value)) * this.chartHeight;
+              newY+=marker.getTraceYOffset();
+              break;
+            }
+          }
+          if(newY!==currentPt.y)break;
+        }
+      }
+      
+      // 限制 Y 轴范围
+      newY=Math.max(this.options.grid.top,Math.min(this.height-this.options.grid.bottom,newY));
+      
+      if(newX!==currentPt.x || newY!==currentPt.y){
+        marker.setMarkerPt({x:newX,y:newY});
+        marker.setScutchonAnchor({x:newX,y:newY});
+        this._updateMarkerData(marker);
+      }
+    });
+  }
+  
   /**
    * 设置图表大小
    */
   setCanvasSize(widths, heights) {
-    
     const width = widths||this.options.width;
     const height = heights||this.options.height;
-    const containerWidth = this.box.clientWidth||400;
-    const containerHeight = this.box.clientHeight||300;
+    const containerWidth = this.box.clientWidth||200;
+    const containerHeight = this.box.clientHeight||160;
+    if(width === "100%"&&this.box.clientWidth===0){
+      console.error("setCanvasSize图表宽度失败width is 100%,but containerWidth is 0")
+      return;
+    }
     // 使用实际像素大小设置 Canvas
     this.canvas.width = width === "100%" ? containerWidth : width;
     this.canvas.height = height === "100%" ? containerHeight: height;
 
     // 设置 CSS 样式，确保 Canvas 在视觉上保持相应比例
+    console.warn("setCanvasSize",width === "100%" ? `containerWidth==${containerWidth}px` : `pptions==${width}px`,"this.canvas.width:"+this.canvas.width);
     this.canvas.style.width = width === "100%" ? `${containerWidth}px` : `${width}px`;
     this.canvas.style.height = height === "100%" ? `${containerHeight}px`: `${height}px`;
     this.width =this.canvas.width;
     this.height =this.canvas.height;
-    // 更新字体大小以适应高分辨率
-    //this.options.fontSize = `${parseInt(this.options.fontSize) * window.devicePixelRatio}px`;
   }
+  
   /**
    * 初始化配置
    * @param {*} options
@@ -112,7 +537,7 @@ class sptmChart {
       "type": "FFT",//图表类型 "FFT" "DScan"
       "duration": 50,//一帧持续时间
       "width": 400,//画布宽度
-      "height": 300,//画布高度
+      "height": 300,//画布背景
       "background": "#CCCCCC",//背景色
       "center_freq": "",//中心频率
       "span": "",//显宽
@@ -125,93 +550,118 @@ class sptmChart {
         "color": "#B7B7B7",//网格线颜色
         "background":"transparent",//网格背景色
         "width": 1,//网格线宽度
-        "xgrid_show": true,//是否显示X轴网格线
-        "xgrid_line_dash":[],//X轴网格线虚线样式[5, 5]实，虚
-        "ygrid_show": true,//是否显示Y轴网格线
-        "ygrid_line_dash":[],//Y轴网格线虚线样式
+        "xgrid_show": true,//是否显示 X 轴网格线
+        "xgrid_line_dash":[],//X 轴网格线虚线样式 [5, 5] 实，虚
+        "ygrid_show": true,//是否显示 Y 轴网格线
+        "ygrid_line_dash":[],//Y 轴网格线虚线样式
         "center_line_show": false,//是否显示中心线
-        "center_color": "#FF0000",//X轴中心线颜色
-        "center_width": 1 //X轴中心线宽度
+        "center_color": "#FF0000",//X 轴中心线颜色
+        "center_width": 1 //X 轴中心线宽度
       },
       "legend":{
         "visible": false,//是否显示图例
       },
-      "xaxis":{ //X轴样式
-        "number": 5,//X轴网格线数量
-        "unit":"",//单位MHz 为空不显示 
-        "unit_two_line": true, // x轴单位是否需要换行
-        "unit_right": 10, // x轴单位距离图表左侧距离
-        "decimals": "",//X轴刻度标签小数位数
-        "dscan_freq":[//DScan模式下的频率范围 [起始频率，结束频率] 传入多个范围时，则分段显示
-          // {
-          //   "start_freq": 0,//X轴起始频率
-          //   "end_freq": 0,//X轴结束频率
-          //   "width":1,//X轴线宽度 1多条时等比宽度
-          // }
+      "xaxis":{ //X 轴样式
+        "number": 5,//X 轴网格线数量
+        "unit":"",//单位 MHz 为空不显示 
+        "unit_two_line": true, // x 轴单位是否需要换行
+        "unit_right": 10, // x 轴单位距离图表左侧距离
+        "decimals": "",//X 轴刻度标签小数位数
+        "dscan_freq":[//DScan 模式下的频率范围 [起始频率，结束频率] 传入多个范围时，则分段显示
         ],
-        "dscan_space": 10,//DScan模式下的频段间隔像素
-        "text_color": "#343434",//X轴文本颜色
-        "text_font_size": 12,//X轴文本字体大小
-        "text_font_family": "Arial",//X轴文本字体
-        "color": "#333",//X轴线颜色
-        "width": 1,//X轴线宽度
-        "labels":[//*X轴刻度标签
-          [{
-              "offsetx": 0,//X轴刻度标签值
-              "text": 19,//X轴刻度标签
-            },
-            {
-              "offsetx": 30,//X轴刻度标签值
-              "text": 20,//X轴刻度标签
-            }
-          ]
+        "dscan_space": 10,//DScan 模式下的频段间隔像素
+        "text_color": "#343434",//X 轴文本颜色
+        "text_font_size": 12,//X 轴文本字体大小
+        "text_font_family": "Arial",//X 轴文本字体
+        "color": "#333",//X 轴线颜色
+        "width": 1,//X 轴线宽度
+        "labels":[//*X 轴刻度标签
         ],
-        "label_two_line": true, // Dscan模式下分段数据第一个是否需要换行 
-        "label_angle":0,//*X轴刻度标签角度
-        "draw_zoom_freq":"",//*X轴绘制缩放基准频率
-        "draw_zoom_span":"",//*X轴绘制缩放基准显宽
+        "label_two_line": true, // Dscan 模式下分段数据第一个是否需要换行 
+        "label_angle":0,//*X 轴刻度标签角度
+        "draw_zoom_freq":"",//*X 轴绘制缩放基准频率
+        "draw_zoom_span":"",//*X 轴绘制缩放基准显宽
       },
-      "yaxis":{ //Y轴样式
-        "number": 5,//Y轴网格线数量
+      "yaxis":{ //Y 轴样式
+        "number": 5,//Y 轴网格线数量
         "unit":"",//单位 dBμV dBm dBμV/m 为空不显示 
-        "decimals": "",//X轴刻度标签小数位数
-        "fixedStep": 20,//Y轴刻度值间隔
-        "init_min_value": -30,//*Y轴最小值
-        "init_max_value": 60,//*Y轴最大值
-        "min_value": -30,//Y轴最小值
-        "max_value": 60,//Y轴最大值
-        "floor_value": -60,//Y轴最小值范围
-        "ceiling_value": 140,//Y轴最大值范围
-        "text_color": "#343434",//Y轴文本颜色
-        "text_font_size": 12,//Y轴文本字体大小
-        "text_font_family": "Arial",//Y轴文本字体
-        "color": "#333",//Y轴线颜色
-        "width": 1,//Y轴线宽度
+        "decimals": "",//X 轴刻度标签小数位数
+        "fixedStep": 20,//Y 轴刻度值间隔
+        "init_min_value": -30,//*Y 轴最小值
+        "init_max_value": 60,//*Y 轴最大值
+        "min_value": -30,//Y 轴最小值
+        "max_value": 60,//Y 轴最大值
+        "floor_value": -60,//Y 轴最小值范围
+        "ceiling_value": 140,//Y 轴最大值范围
+        "text_color": "#343434",//Y 轴文本颜色
+        "text_font_size": 12,//Y 轴文本字体大小
+        "text_font_family": "Arial",//Y 轴文本字体
+        "color": "#333",//Y 轴线颜色
+        "width": 1,//Y 轴线宽度
         "axis_function":function(value){
           return value
-        },//Y轴刻度值计算函数
-        "zoom_value": "",//*Y轴缩放基准值
-        "labels":[],//*Y轴刻度标签
+        },//Y 轴刻度值计算函数
+        "zoom_value": "",//*Y 轴缩放基准值
+        "labels":[],//*Y 轴刻度标签
       },
-      "marker":{ //marker样式
-        "visible": true,//是否显示marker
-        "tip_show": true,//是否显示提示框
-        "freqdiff_show": true,//是否显示频率差弹窗
-        "is_add": true,//是否可以添加marker
-        "color": "#FF0000",//marker颜色
-        "width": 1,//marker宽度
-        "focus_color": "#FF0000",//marker选中颜色
-        "focus_width": 1,//marker选中宽度
-        "text_color": "#FFFFFF",//提示框文本颜色
-        "text_font_size": 12,//提示框文本字体大小
-        "text_font_family": "Arial",//提示框文本字体
-        "background": "#000000",//提示框背景色
-        "border_radius": 6,//提示框圆角
-        "difftext_color": "#FF0000",//频率差框文本颜色
-        "difftext_font_size": 12,//频率差文本字体大小
-        "difftext_font_family": "Arial",//频率差文本字体
-        "diff_background": "#000000",//频率差背景色
-        "diff_border_radius": 6,//频率差圆角
+      "marker":{ //Marker 样式 - 新增
+        "visible": true,//是否显示 marker
+        "autoAdd": true,//是否自动添加默认 marker 否则按照谱线id 添加
+        "defaultCount": 1,//默认添加数量
+        "maxCount": 10,//最大 marker 数量
+        "shape": 0,//形状 0-常规 1-倒置
+        "verticalLine": true,//是否显示垂直线
+        "crossLine": false,//是否显示十字线
+        "scutchonVisible": true,//是否显示标牌
+        "colorGroup":{//颜色配置
+          "activeForeground": "#239ee7",
+          "inactiveForeground": "#535353",
+          "noFocusBackground": "#bfbfbf",
+          "focusBackground": "#ff9800",
+          "crossBorderText": "#ff0000",
+          "lineColor": "#9e9e9e",
+          "scutchonBackground": "rgba(49, 52, 69, 0.9)",
+          "scutchonForeground": "#ffffff"
+        },
+        "clickBlankToExit": false  // 点击空白区域退出焦点
+      },
+      "contextMenu":{ //全局右键菜单配置 - 新增
+        "enabled": true,//是否启用右键菜单
+        "actions":[],//右键菜单动作列表
+      //"exitFocus","getPosition"'exitFocus',
+      // {
+      //   type: 'getPosition',
+      //   label: '查看位置',
+      //   handler: (positionInfo, event, context) => {
+      //     // 自定义处理逻辑
+      //     console.log('自定义位置处理:', positionInfo);
+      //     showCustomTooltip(positionInfo);
+      //   }
+      // },
+      // {
+      //   type: 'custom',
+      //   label: '重置视图',
+      //   handler: (event, context) => {
+      //     context.chart.setFFTCenterFreAndSpan(100000000, 50000000);
+      //     context.chart.drawChart();
+      //   }
+      // }
+        "onCustomAction": null,//自定义动作回调
+        "onGetPosition": null//自定义菜单位置回调
+      },
+      "centerinfo":{ //中心频率信息框 - 新增
+        "visible": false,//是否显示信息框
+        "position": "top-center",//位置：top-left, top-center, top-right, bottom-left, bottom-center, bottom-right
+        "offsetX": 0,//X 方向偏移量
+        "offsetY": 0,//Y 方向偏移量
+        "background": "rgba(0, 0, 0, 0.7)",//背景颜色
+        "text_color": "#FFFFFF",//文本颜色
+        "font_size": 12,//字体大小
+        "padding": 8,//内边距
+        "border_radius": 4,//圆角半径
+        "show_center_freq": true,//显示中心频率
+        "show_current_freq": true,//显示当前频率（Marker 频率）
+        "show_level": true,//显示当前强度
       },
       "threshold":{ //门限样式
         "visible": false,//是否显示门限
@@ -231,7 +681,7 @@ class sptmChart {
         "drag_icon_url":"",//拖拽门限图标
         "icon_size": [30,20],//门限图标大小
       },
-      "sptm_area":{ //FFT频谱区域
+      "sptm_area":{ //FFT 频谱区域
         "visible": false,//频谱是否显示区域
         "background": "ragb(0,0,0,0.5)",//频谱区域背景色
         "drag_background": "ragb(0,0,0,0.5)",//拖拽频谱区域背景色
@@ -244,37 +694,42 @@ class sptmChart {
         "color": "#00afff",//谱值提示线颜色
         "width": 1,//谱值提示线宽度
         "text_color": "#333",//谱值提示文本颜色
-        "text_font_size": 12,//谱值提示文本字体大小
+        "text_size": 12,//谱值提示文本字体大小
         "is_draw":false,//*是否绘制鼠标在网格区域内，有数据值
-        "point": {//*鼠标所在x轴坐标
-          "pointx": 0,//鼠标所在x轴坐标
-          "pointy": 0,//鼠标所在y轴坐标
+        "point": {//*鼠标所在 x 轴坐标
+          "pointx": 0,//鼠标所在 x 轴坐标
+          "pointy": 0,//鼠标所在 y 轴坐标
         },
       }
     }
     const mergedOptions = deepMerge({}, defaultOptions);
     this.options = deepMerge(mergedOptions,options);
-    //初始化参数和DPR计算
+    //初始化参数和 DPR 计算
     this.options.grid.left=Math.floor(this.options.grid.left*this.devicePixelRatio);
     this.options.grid.bottom=Math.floor(this.options.grid.bottom*this.devicePixelRatio);
     this.options.grid.top=Math.floor(this.options.grid.top*this.devicePixelRatio);
     this.options.grid.right=Math.floor(this.options.grid.right*this.devicePixelRatio);
     this.options.yaxis.init_min_value=this.options.yaxis.min_value
     this.options.yaxis.init_max_value=this.options.yaxis.max_value
-    this.yLabelGridInfo={}//y轴标签网格信息
-    this.xLabelGridInfo=[]//x轴标签网格信息
+    this.yLabelGridInfo={}//y 轴标签网格信息
+    this.xLabelGridInfo=[]//x 轴标签网格信息
     
-    //if(this.options.yaxis.max_value-this.options.yaxis.min_value<=this.options.yaxis.fixedStep||){
-      this.options.yaxis.fixedStep=(this.options.yaxis.ceiling_value-this.options.yaxis.floor_value)/(this.options.yaxis.number-1)
-    //}
-    console.log("初始化配置",this.options.yaxis.fixedStep)
+    this.options.yaxis.fixedStep=(this.options.yaxis.ceiling_value-this.options.yaxis.floor_value)/(this.options.yaxis.number-1)
+    if(this.ceiling_value&&this.ceiling_value!==this.options.yaxis.ceiling_value){
+      console.warn("图表y轴最大值已改变，请重新设置图表数据",this.options.yaxis.ceiling_value,this.ceiling_value)
+    }
+    this.ceiling_value=this.options.yaxis.ceiling_value;
+    console.warn("图表y轴最大值：",this.ceiling_value)
   }
+
+  
   init(){
     this.clearCanvas();
     this.initBackground();
     this.drawAxis();
     this.drawGrid();
   }
+  
   /*
    *初始化门限div
   */
@@ -296,6 +751,7 @@ class sptmChart {
     this.thresholdDiv.addEventListener('mouseout', this.thresholdMouseout.bind(this));
     this.thresholdDiv.addEventListener('mouseup', this.thresholdMouseout.bind(this));
   }
+  
   initFredTip(){
     const freqTip= document.createElement('span');
     freqTip.className = 'sptmchart_freqtip';
@@ -306,12 +762,14 @@ class sptmChart {
     this.canvas.parentNode.appendChild(freqTip);
     this.fretipDiv =freqTip
   }
+  
   /**
    *清空画布
    */
   clearCanvas(){
     this.ctx.clearRect(0, 0, this.width, this.height);
   }
+  
   /**
    * 初始化背景
    */
@@ -319,6 +777,7 @@ class sptmChart {
     this.ctx.fillStyle = this.options.background;
     this.ctx.fillRect(0, 0, this.width, this.height);
   }
+  
   /**
    * 初始化图表
    */
@@ -337,30 +796,29 @@ class sptmChart {
     this.ctx.fillStyle = this.options.xaxis.text_color; 
     this.ctx.textBaseline = 'top';
     this.ctx.font = `${this.options.xaxis.text_font_size*this.devicePixelRatio}px ${this.options.xaxis.text_font_family}`;
-    //const xLabelStep = (this.width - this.options.grid.left - this.options.grid.right) / (this.options.xaxis.labels.length - 1);
+    
     this.options.xaxis.labels.forEach((data, index) => {
       for (let j = 0; j < data.length; j++) {
         const items = data[j];
         const texts = truncateNumber(items.text, this.options.xaxis.decimals);
-        let angleInRadians = this.options.xaxis.label_angle * Math.PI / 180; // 将角度转换为弧度
+        let angleInRadians = this.options.xaxis.label_angle * Math.PI / 180;
 
         var x = this.options.grid.left + items.offsetx ;
         var y = this.height - this.options.grid.bottom + 8;
 
         if (this.options.xaxis.label_two_line) {
           this.ctx.textAlign = 'center';
-          // 第一个点错位
           if (index > 0 && j == 0) {
             y = this.height - this.options.grid.bottom + this.options.grid.bottom / 2;
           }
-          this.ctx.fillText(texts, x, y); // 绘制文字
+          this.ctx.fillText(texts, x, y);
         } else {
           if (this.options.xaxis.label_angle > 0) {
-            this.ctx.save(); // 保存当前绘图状态
-            this.ctx.translate(x, y); // 原点移动到移动到标签位置
-            this.ctx.rotate(angleInRadians); // 应用旋转变换
-            this.ctx.fillText(texts, 0, 0); // 绘制旋转后的文字
-            this.ctx.restore(); // 恢复上下文状态
+            this.ctx.save();
+            this.ctx.translate(x, y);
+            this.ctx.rotate(angleInRadians);
+            this.ctx.fillText(texts, 0, 0);
+            this.ctx.restore();
           } else {
             this.ctx.textAlign = 'center';
             let halfWidth = this.ctx.measureText(texts).width / 2
@@ -371,7 +829,7 @@ class sptmChart {
             if (index > 0 && j == 0) {
               x = this.options.grid.left + items.offsetx + halfWidth;
             }
-            this.ctx.fillText(texts, x, y); // 绘制文字
+            this.ctx.fillText(texts, x, y);
           }
         } 
       }
@@ -385,6 +843,7 @@ class sptmChart {
         this.ctx.fillText(this.options.xaxis.unit, this.width-this.options.grid.right+this.options.xaxis.unit_right, this.height - this.options.grid.bottom + 8);
       }
     }
+    
     // 绘制y轴
     this.ctx.strokeStyle = this.options.yaxis.color;
     this.ctx.lineWidth = this.options.yaxis.width||1;
@@ -404,50 +863,44 @@ class sptmChart {
       const texts=truncateNumber(centtext,this.options.yaxis.decimals);
       this.ctx.fillText(texts, this.options.grid.left - 5, y);
     });
+    
     //绘制Y轴单位
     if(this.options.yaxis.unit!==""){
       this.ctx.fillText(this.options.yaxis.unit, this.options.grid.left - 5, this.options.grid.top/2);
     }
-    
   }
+  
   /**
    * 绘制图例
    */
   drawLegend() {
     const { grid, legend } = this.options;
     if(!legend.visible)return false;
-    // 计算每个标签的宽度并累加
+    
     const legendItems = this.tracesData.map((data, index) => {
         if(data.visible){
           const label = data.name || `数据 ${index + 1}`;
           const color=data.color;
-          const width = this.ctx.measureText(label).width + 20; // 加上间距
+          const width = this.ctx.measureText(label).width + 20;
           return { label, width ,color};
         }
-    });
+    }).filter(item=>item);
 
-    // 计算总宽度
-
-    const totalLegendWidth = legendItems.reduce((sum, item) => sum + item.width + 15, 0)-20; // 15是方块宽度加间距
-
-    // 设置图例的X坐标，确保水平居中
+    const totalLegendWidth = legendItems.reduce((sum, item) => sum + item.width + 15, 0)-20;
     const legendX = (this.width - totalLegendWidth) / 2;
-
     const legendY = grid.top/2;
 
-    this.ctx.fillStyle = legend.color;
-
-    // 绘制每个数据集的图例
-    let currentX = legendX; // 当前X坐标，用于排列图例
+    let currentX = legendX;
     legendItems.forEach((item, index) => {
         this.ctx.fillStyle = item.color;
-        this.ctx.fillRect(currentX, legendY-5, 10, 10); // 绘制颜色方块
-        this.ctx.fillStyle = legend.color;
+        this.ctx.fillRect(currentX, legendY-5, 10, 10);
+        this.ctx.fillStyle = legend.color||'#333';
         this.ctx.textAlign = 'left';
-        this.ctx.fillText(item.label, currentX + 20, legendY); // 绘制标签
-        currentX += item.width+15; // 更新当前X坐标
+        this.ctx.fillText(item.label, currentX + 20, legendY);
+        currentX += item.width+15;
     });
   }
+  
   /**
    * 绘制网格
    */
@@ -457,9 +910,9 @@ class sptmChart {
     this.ctx.strokeStyle = this.options.grid.color;
     this.ctx.lineWidth =  this.options.grid.width;
     this.ctx.setLineDash(this.options.grid.ygrid_line_dash);
+    
     // 绘制网格Y轴线
     if(this.options.grid.ygrid_show&&this.options.xaxis.labels.length>0){
-      
       this.options.xaxis.labels.forEach((data,indexs)=>{
         for (let index = 0; index < data.length; index++) {
           let colors=this.options.grid.color
@@ -477,25 +930,29 @@ class sptmChart {
         }
       })
     }
+    
     // 绘制网格x轴线
-    const gridLength = this.yLabelGridInfo.gridLabels.length
+    const gridLength = this.yLabelGridInfo.gridLabels?.length||0;
     this.ctx.strokeStyle = this.options.grid.color;
     this.ctx.setLineDash(this.options.grid.xgrid_line_dash);
     this.ctx.beginPath();
+    
     if(this.options.grid.xgrid_show&&gridLength>0){
-      
       for (let j = 0; j <= gridLength; j ++) {
         let items=this.yLabelGridInfo.gridLabels[j];
-        let y=(items-this.options.yaxis.min_value)*this.yLabelGridInfo.pxStep
+        if(items===undefined)continue;
+        let y=(items-this.options.yaxis.min_value)*this.yLabelGridInfo.pxStep;
         this.ctx.moveTo(this.options.grid.left, this.height - this.options.grid.bottom - y);
         this.ctx.lineTo(this.width - this.options.grid.right, this.height - this.options.grid.bottom - y);
         this.ctx.stroke();
       }
     }
+
     //恢复线样式
     this.ctx.setLineDash([]);
+    
+    // 绘制中心线
     if(this.options.grid.center_line_show){
-      //y中心线
       this.ctx.strokeStyle = this.options.grid.center_color;
       this.ctx.lineWidth = this.options.grid.center_width;
       this.ctx.beginPath();
@@ -503,8 +960,8 @@ class sptmChart {
       this.ctx.lineTo(this.options.grid.left+this.chartWidth/2, this.height - this.options.grid.bottom);
       this.ctx.stroke();
     }
-    
   }
+  
   /**
    * 绘制画布
   */
@@ -515,6 +972,22 @@ class sptmChart {
     this.drawLegend();
     this.drawTraces();
     this.drawOther();
+    //绘制Markers
+    this._drawMarkers();
+    // 绘制中心频率信息框
+    this.drawCenterInfoBox();
+  }
+  
+  /*
+  * 清除画布绘制
+  */
+  clearDraw(){
+    this.clearCanvas();
+  }
+  clearData(){
+    this.clearCanvas();
+    this.drawAxis();
+    this.drawGrid();
   }
   /**
    * 绘制图表
@@ -532,13 +1005,12 @@ class sptmChart {
       this.draw();
     }
   }
+  
   /**
    * 绘制门限
    */
   drawThreshold(){
     if(this.options.threshold.visible){
-      //门限线
-      
       let colors=this.options.threshold.color;
       let widhts=this.options.threshold.width;
       if(this.options.threshold.is_mouse||this.thresholdFouce){
@@ -583,6 +1055,7 @@ class sptmChart {
       this.thresholdDiv.style.display = 'none';
     }
   }
+  
   /**
    * 绘制提示线
    */
@@ -612,12 +1085,142 @@ class sptmChart {
       this.fretipDiv.style.display="none";
     }
   }
+  
   drawOther(){
     //绘制门限
     this.drawThreshold();
     //绘制提示线
     this.drawTipLine();
   }
+  
+    /**
+   * 绘制中心频率信息框
+   */
+  drawCenterInfoBox(){
+    if(!this.options.centerinfo.visible)return;
+    
+    const info = this.options.centerinfo;
+    const padding = info.padding * this.devicePixelRatio;
+    const fontSize = info.font_size * this.devicePixelRatio;
+    const lineHeight = fontSize * 1.4;
+    
+    // 构建显示内容
+    const lines = [];
+    
+    // 中心频率
+    if(info.show_center_freq && this.options.center_freq){
+      const centerFreqMHz = (this.options.center_freq / 1000000).toFixed(2);
+      lines.push(`中心频率：${centerFreqMHz} MHz`);
+    }
+    
+    // 当前频率和强度（如果有焦点 Marker）
+    if(info.show_current_freq && this._focusMarkerId > 0){
+      const marker = this._markerList.get(this._focusMarkerId);
+      if(marker){
+        const freq = marker.getFrequency();
+        if(freq > 0){
+          const freqMHz = (freq / 1000000).toFixed(6);
+          lines.push(`频率：${freqMHz} MHz`);
+          
+          // 获取当前强度（从 Marker 的标牌数据中获取）
+          const scutchonList = marker.getScutchonList();
+          if(scutchonList.length > 1){
+            // 第二行通常是第一条谱线的强度
+            const levelText = scutchonList[1][0]?.text || '';
+            const match = levelText.match(/:\s*([\d.-]+)/);
+            if(match){
+              const level = parseFloat(match[1]);
+              lines.push(`强度：${level.toFixed(2)} ${this.options.yaxis.unit||'dBμV'}`);
+            }
+          }
+        }
+      }
+    }
+    
+    if(lines.length === 0)return;
+    
+    // 计算文本框大小
+    this.ctx.font = `${fontSize}px Arial`;
+    let maxWidth = 0;
+    for(const line of lines){
+      const metrics = this.ctx.measureText(line);
+      if(metrics.width > maxWidth)maxWidth = metrics.width;
+    }
+    
+    const boxWidth = maxWidth + padding * 2;
+    const boxHeight = lines.length * lineHeight + padding * 2;
+    const borderRadius = info.border_radius * this.devicePixelRatio;
+    
+    // 计算位置
+    let boxX, boxY;
+    const baseOffsetX = info.offsetX * this.devicePixelRatio;
+    const baseOffsetY = info.offsetY * this.devicePixelRatio;
+    
+    switch(info.position){
+      case 'top-left':
+        boxX = baseOffsetX;
+        boxY = baseOffsetY;
+        break;
+      case 'top-center':
+        boxX = (this.width - boxWidth) / 2 + baseOffsetX;
+        boxY = baseOffsetY;
+        break;
+      case 'top-right':
+        boxX = this.width - boxWidth + baseOffsetX;
+        boxY = baseOffsetY;
+        break;
+      case 'bottom-left':
+        boxX = baseOffsetX;
+        boxY = this.height - boxHeight + baseOffsetY;
+        break;
+      case 'bottom-center':
+        boxX = (this.width - boxWidth) / 2 + baseOffsetX;
+        boxY = this.height - boxHeight + baseOffsetY;
+        break;
+      case 'bottom-right':
+        boxX = this.width - boxWidth + baseOffsetX;
+        boxY = this.height - boxHeight + baseOffsetY;
+        break;
+      default:
+        boxX = (this.width - boxWidth) / 2;
+        boxY = baseOffsetY;
+    }
+    
+    // 绘制背景
+    this.ctx.save();
+    this.ctx.fillStyle = info.background;
+    
+    // 绘制圆角矩形
+    const r = borderRadius;
+    this.ctx.beginPath();
+    this.ctx.moveTo(boxX + r, boxY);
+    this.ctx.lineTo(boxX + boxWidth - r, boxY);
+    this.ctx.quadraticCurveTo(boxX + boxWidth, boxY, boxX + boxWidth, boxY + r);
+    this.ctx.lineTo(boxX + boxWidth, boxY + boxHeight - r);
+    this.ctx.quadraticCurveTo(boxX + boxWidth, boxY + boxHeight, boxX + boxWidth - r, boxY + boxHeight);
+    this.ctx.lineTo(boxX + r, boxY + boxHeight);
+    this.ctx.quadraticCurveTo(boxX, boxY + boxHeight, boxX, boxY + boxHeight - r);
+    this.ctx.lineTo(boxX, boxY + r);
+    this.ctx.quadraticCurveTo(boxX, boxY, boxX + r, boxY);
+    this.ctx.closePath();
+    this.ctx.fill();
+    
+    // 绘制文本
+    this.ctx.fillStyle = info.text_color;
+    this.ctx.textAlign = 'left';
+    this.ctx.textBaseline = 'top';
+    
+    for(let i=0; i<lines.length; i++){
+      const textY = boxY + padding + i * lineHeight;
+      this.ctx.fillText(lines[i], boxX + padding, textY);
+    }
+    
+    this.ctx.restore();
+  }
+
+  
+
+
   /**
    *停止绘制
    */
@@ -628,12 +1231,13 @@ class sptmChart {
       this.refreshInterval=null;
     }
   }
+  
   /**
    * 绘制谱线
    */
   drawTraces(){
     for (let i = 0; i < this.tracesData.length; i++) {
-      if (this.tracesData[i].datainfo.length>0&&this.tracesData[i].visible) {
+      if (this.tracesData[i].datainfo?.length>0&&this.tracesData[i].visible) {
         let linedata=this.tracesData[i].datainfo
         for (let j = 0; j < linedata.length; j++) {
           this.drawTypeLine(this.tracesData[i],j);
@@ -641,56 +1245,48 @@ class sptmChart {
       }
     }
   }
+
+
   /**
    * 判断绘制图表线类型
    * @param {*} datas 
    */
   drawTypeLine(lineData,order){
-    //console.log("绘制谱线数据",lineData)
-    let data=lineData.datainfo[order]
-    data.width=lineData.width
-    data.color=lineData.color
-    data.type=lineData.type
-    data.drawData=data.data.slice(0);
-    data.order=order//数据序号
-    //X轴标签网格信息
-    let labelInfo=this.xLabelGridInfo[data.order]
-    let drawWidth=labelInfo.width
+    let data={...lineData.datainfo[order]};
+    data.width=lineData.width;
+    data.color=lineData.color;
+    data.type=lineData.type;
+    data.drawData=data.data?[...data.data]:[];
+    data.order=order;
+    // 出力点数undefined
+    data.point=data.drawData.length||0;
+    let labelInfo=this.xLabelGridInfo[data.order];
+    if(!labelInfo)return;
+    
+    let drawWidth=labelInfo.width;
 
     //截取区域内点数
     if(labelInfo.start_freq!==labelInfo.show_start_freq||labelInfo.end_freq!==labelInfo.show_end_freq){
-      //需要截取数据
-      // let startOrder=Math.floor((labelInfo.show_start_freq-labelInfo.start_freq)*(labelInfo.end_freq-labelInfo.start_freq)/data.point)
-      // let endOrder=Math.floor((labelInfo.show_end_freq-labelInfo.start_freq)*(labelInfo.end_freq-labelInfo.start_freq)/data.point)
-      let startOrder=Math.floor((labelInfo.show_start_freq-labelInfo.start_freq)*data.point/(labelInfo.end_freq-labelInfo.start_freq))
-      let endOrder=Math.floor((labelInfo.show_end_freq-labelInfo.start_freq)*data.point/(labelInfo.end_freq-labelInfo.start_freq))
-      data.drawData=data.data.slice(startOrder,endOrder)
+      let startOrder=Math.floor((labelInfo.show_start_freq-labelInfo.start_freq)*data.point/(labelInfo.end_freq-labelInfo.start_freq));
+      let endOrder=Math.floor((labelInfo.show_end_freq-labelInfo.start_freq)*data.point/(labelInfo.end_freq-labelInfo.start_freq));
+      data.drawData=data.data.slice(startOrder,endOrder);
     }
+    
+    //数据抽点处理
     if(data.drawData.length>drawWidth){
-      //数据过多抽点
-      let type="maxmin"
-      let pointdata=""
-      if(type=="maxmin"){
-        data.lineType='pointline'
-        pointdata=this.extractTwoPolesTraceLine(data.data,data.data.length,drawWidth)
-        data.drawData=pointdata
-        //this.drawPointLineTrace(data)
-      }else{
-        data.lineType='line'
-        pointdata=this.extractTraceData(data.data,data.data.length,drawWidth)
-        data.drawData=pointdata
-        //this.drawLineTrace(data)
-      }
-    }else if(data.drawData.length==drawWidth){
-      data.lineType='line'
-      data.drawData=data.data
-      //this.drawLineTrace(data)
+      data.lineType='pointline';
+      let pointdata=this.extractTwoPolesTraceLine(data.data,data.data.length,drawWidth);
+      data.drawData=pointdata;
+    }else if(data.drawData.length===drawWidth){
+      data.lineType='line';
+      data.drawData=data.data;
     }else{
-      data.lineType='step'
-      //this.drawStepTrace(data)
+      data.lineType='step';
     }
-    this.drawLine(data)
+    
+    this.drawLine(data);
   }
+  
   /**
    * 绘制线
    * @param {*} datas 谱线数据
@@ -704,49 +1300,29 @@ class sptmChart {
         this.chartWidth,
         this.chartHeight
     );
-    // 裁剪谱线超过图表区域的部分
-    this.ctx.clip(); 
+    this.ctx.clip();
     this.ctx.beginPath();
     this.ctx.strokeStyle = data.color;
     this.ctx.lineWidth = data.width || 1;
-    let linedata=data.drawData
-    if(data.lineType=='pointline'){
-      linedata=data.drawData.targetData
-    }
-    //X轴标签网格信息
-    let labelInfo=this.xLabelGridInfo[data.order]
-    //console.log("绘制线",data,labelInfo)
-    let drawStepPx=labelInfo.width/(linedata.length-1)
-    // if(data.lineType=='step'){
-    //   drawStepPx=labelInfo.width/(linedata.length-1)
-    // }
     
-    //数据不完整
-    // if(data.point>data.data.length){
-      
-    //   let drawWidth=data.data.length/data.point*labelInfo.width
-    //   drawStepPx=drawWidth/(linedata.length-1)
-    // }
-    //更新当前绘制点间隔像素
+    let linedata=data.drawData;
+    if(data.lineType=='pointline'){
+      linedata=data.drawData.targetData;
+    }
+    
+    let labelInfo=this.xLabelGridInfo[data.order];
+    let drawStepPx=labelInfo.width/(linedata.length-1);
     labelInfo.drawStepPx=drawStepPx;
-    labelInfo.lineType=data.lineType
+    labelInfo.lineType=data.lineType;
+    
     if(data.lineType=='line'){
-      //线性
       for (let i = 0; i < linedata.length; i++) {
         let point = linedata[i];
         let startPointPx=labelInfo.start_x;
         let startx=this.options.grid.left+startPointPx;
         let x = startx + i * drawStepPx;
-        if(x>this.width-this.options.grid.right||x<this.options.grid.left){
-          break;
-        }
+        if(x>this.width-this.options.grid.right||x<this.options.grid.left)break;
         let y = this.height - this.options.grid.bottom - ((point - this.options.yaxis.min_value) /(this.options.yaxis.max_value - this.options.yaxis.min_value)) * this.chartHeight;
-        // if(y>(this.height -this.options.grid.bottom)){
-        //   y=this.height -this.options.grid.bottom
-        // }
-        // if(y<this.options.grid.top){
-        //   y=this.options.grid.top
-        // }
         if(i==0){
           this.ctx.moveTo(x, y);
         }else{
@@ -754,65 +1330,33 @@ class sptmChart {
         }
       }
     }else if(data.lineType=='step'){
-      //步进线
       for (let j = 0; j < data.drawData.length; j++) {
         let point = data.drawData[j];
         let startPointPx=labelInfo.start_x;
         let startx=this.options.grid.left+startPointPx;
-        //第一个点一半
         let x1 = startx + j * drawStepPx-drawStepPx/2;
         let x2 = startx+ j * drawStepPx+drawStepPx/2;
-        // let x1 = startx + j * drawStepPx;
-        // let x2 = startx+ j * drawStepPx+drawStepPx;
-        if(x1<this.options.grid.left){
-          x1=this.options.grid.left;
-        }
-        if(x2>(this.width-this.options.grid.right)){
-          x2=this.width-this.options.grid.right
-        }
+        if(x1<this.options.grid.left)x1=this.options.grid.left;
+        if(x2>this.width-this.options.grid.right)x2=this.width-this.options.grid.right;
         let y = this.height - this.options.grid.bottom - ((point - this.options.yaxis.min_value) /(this.options.yaxis.max_value - this.options.yaxis.min_value)) * this.chartHeight;
-        // if(y>(this.height -this.options.grid.bottom)){
-        //   y=this.height -this.options.grid.bottom
-        // }
-        // if(y<this.options.grid.top){
-        //   y=this.options.grid.top
-        // }
-        
         if(j==0){
           this.ctx.moveTo(startx, y);
           this.ctx.lineTo(x2, y);
         }else{
-          // 先水平线到下一个 x，再垂直线到下一个 y
-          this.ctx.lineTo(x1, y); // 水平线
-          this.ctx.lineTo(x2, y); // 垂直线
+          this.ctx.lineTo(x1, y);
+          this.ctx.lineTo(x2, y);
         }
       }
     }else if(data.lineType=='pointline'){
-      //大小点线
       for (let i = 0; i < linedata.length; i++) {
         let point = linedata[i][0];
         let minpoint = linedata[i][1];
         let startPointPx=labelInfo.start_x;
         let startx=this.options.grid.left+startPointPx;
         let x = startx+ i * drawStepPx;
-        if(x>this.width-this.options.grid.right||x<this.options.grid.left){
-          break;
-        }
+        if(x>this.width-this.options.grid.right||x<this.options.grid.left)break;
         let y = this.height - this.options.grid.bottom - ((point - this.options.yaxis.min_value) /(this.options.yaxis.max_value - this.options.yaxis.min_value)) * this.chartHeight;
         let y1 = this.height - this.options.grid.bottom - ((minpoint - this.options.yaxis.min_value) /(this.options.yaxis.max_value - this.options.yaxis.min_value)) * this.chartHeight;
-        
-        // if(y>(this.height -this.options.grid.bottom)){
-        //   y=this.height -this.options.grid.bottom
-        // }
-        // if(y<this.options.grid.top){
-        //   y=this.options.grid.top
-        // }
-        // if(y1>(this.height -this.options.grid.bottom)){
-        //   y1=this.height -this.options.grid.bottom
-        // }
-        // if(y1<this.options.grid.top){
-        //   y1=this.options.grid.top
-        // }
         if(i==0){
           this.ctx.moveTo(x, y);
           this.ctx.lineTo(x, y1);
@@ -825,8 +1369,67 @@ class sptmChart {
     
     this.ctx.stroke();
     this.ctx.restore();
-
+  }
+  
+  /**
+   * 保留最大最小方式抽点
+   * @param {*} data 源数据
+   * @param {*} dataLen 源数据长度
+   * @param {*} targetLen 目标长度
+   */
+  extractTwoPolesTraceLine(data,dataLen,targetLen){
+    let targetData=[];
+    let dataIndex=[];
+    let targetCout=0;
+    let selectIndex=this.selectDataIndex(dataLen,targetCout,targetLen);
+    let isMaxSelected=false;
+    let maxValue=0,minValue=0;
+    let maxIndex=-1,minIndex=-1;
     
+    for(let j=0;j<dataLen;j++){
+      if(isMaxSelected){
+        if(data[j]>maxValue){
+          maxValue=data[j];
+          maxIndex=j;
+        }
+        if(data[j]<minValue){
+          minValue=data[j];
+          minIndex=j;
+        }
+      }else{
+        maxValue=data[j];
+        minValue=data[j];
+        maxIndex=j;
+        minIndex=j;
+        isMaxSelected=true;
+      }
+      
+      if(selectIndex==j){
+        targetData[targetCout]=[maxValue,minValue];
+        dataIndex[targetCout]=[maxIndex,minIndex];
+        targetCout++;
+        isMaxSelected=false;
+        selectIndex=this.selectDataIndex(dataLen,targetCout,targetLen);
+      }
+    }
+    return {targetData,dataIndex};
+  }
+  
+  /**
+   * 频谱源数据索引值
+   * @param {*} dataLen 源数据长度
+   * @param {*} targetIndex 目标索引值
+   * @param {*} targetLen 目标长度
+   */
+  selectDataIndex(dataLen,targetIndex,targetLen){
+    if(targetIndex>=dataLen||dataLen==0||targetLen==0)return 0;
+    if(targetLen==1)return Math.floor(dataLen/2);
+    if(targetLen==dataLen)return targetIndex;
+    if(dataLen>targetLen){
+      return Math.floor((targetIndex+1)*dataLen/targetLen)-1;
+    }else{
+      return Math.floor(targetIndex*dataLen/targetLen);
+    }
   }
   
   /**
@@ -845,15 +1448,15 @@ class sptmChart {
     }
     const options = deepMerge(defaultOption, option);
     this.tracesData.push(options);
-    this.isDraw=true
+    this.isDraw=true;
     this.drawChart();
   }
+  
   /**
    * 设置谱线数据
    * @param {*} id 谱线id
    * @param {*} data 谱线数据
    */
-  
   setTraceData(id,data){
     for (let i = 0; i < this.tracesData.length; i++) {
       if (this.tracesData[i].id === id) {
@@ -861,36 +1464,23 @@ class sptmChart {
         break;
       }
     }
-    this.isDraw=true
+    this.isDraw=true;
     this.drawChart();
   }
+  
   /**
-   * 设置单频谱线数据
-   * @param {*} id 
-   * @param {*} dataInfo 
+   * 设置谱线可见
+   * @param {*} id 谱线id
+   * @param {*} visible 谱线可见
    */
-  setFFTTraceData(id,dataInfo){
+  setTranceVisible(id,visible){
     for (let i = 0; i < this.tracesData.length; i++) {
       if (this.tracesData[i].id === id) {
-        this.tracesData[i].datainfo=dataInfo;
+        this.tracesData[i].visible=visible;
         break;
       }
     }
-    this.isDraw=true
-    this.drawChart();
-  }
-  /**
-   * 设置频段谱线数据
-   * @param {*} id 
-   * @param {*} dataInfo 
-   */
-  setDScanTraceData(id,dataInfo){
-    for (let i = 0; i < this.tracesData.length; i++) {
-      if (this.tracesData[i].id === id) {
-        this.tracesData[i].datainfo=dataInfo;
-        break;
-      }
-    }
+    this.isDraw=true;
     this.drawChart();
   }
   /**
@@ -900,152 +1490,33 @@ class sptmChart {
     this.options.xaxis.labels=[];
     this.options.yaxis.labels=[];
     
-    //计算图表宽高
-    this.chartWidth=Math.floor(this.width - this.options.grid.left - this.options.grid.right)
-    this.chartHeight=Math.floor(this.height - this.options.grid.top - this.options.grid.bottom)
-    //计算网格步进
+    this.chartWidth=Math.floor(this.width - this.options.grid.left - this.options.grid.right);
+    this.chartHeight=Math.floor(this.height - this.options.grid.top - this.options.grid.bottom);
+    
     const yWidth=this.chartHeight/(this.options.yaxis.number-1);
-    const yStepLabels=calculateStepValues(yWidth,this.options.yaxis.min_value,this.options.yaxis.max_value,this.options.yaxis.fixedStep,this.yZoom,this.options.yaxis.floor_value,this.options.yaxis.ceiling_value,this.options.yaxis.number);
+    const yStepLabels=calculateStepValues(
+      yWidth,
+      this.options.yaxis.min_value,
+      this.options.yaxis.max_value,
+      this.options.yaxis.fixedStep,
+      this.yZoom,
+      this.options.yaxis.floor_value,
+      this.options.yaxis.ceiling_value,
+      this.options.yaxis.number
+    );
+    
     this.yLabelGridInfo=yStepLabels;
-    //更新Y轴范围
     this.options.yaxis.min_value=yStepLabels.minValue;
     this.options.yaxis.max_value=yStepLabels.maxValue;
-    console.log("cumputeLabels计算y轴",this.options.yaxis.max_value,this.options.yaxis.min_value)
+    
     this.options.grid.right = this.width - this.options.grid.left - this.chartWidth;
     this.options.grid.bottom = this.height - this.options.grid.top - this.chartHeight;
-    this.ygridStep=yStepLabels.labelStep
+    this.ygridStep=yStepLabels.labelStep;
+    
     if(this.options.type=="DScan"){
-      //一条频段
-      let xCoutWidth=[this.chartWidth];
-      let dscan_freq=this.options.xaxis.dscan_freq
-      let dscan_space=this.options.xaxis.dscan_space
-      let drawArray=[]//x轴标签
-      
-      //计算起始点
-      let startPointPx=0;
-      let widths=[]
-      for(let j=0;j<dscan_freq.length;j++){
-        let itemdata=dscan_freq[j];
-        widths.push(itemdata.width)
-      }
-      //计算宽度
-      let widthVal=calculateWidths(this.chartWidth,widths,dscan_space)
-      xCoutWidth=widthVal.widths;
-      for(let i=0;i<dscan_freq.length;i++){
-        let itemdata=dscan_freq[i];
-        let datastartFreq=itemdata.start_freq;
-        let dataendFreq=itemdata.end_freq;
-        let datacenterFreq=datastartFreq+(dataendFreq-datastartFreq)/2;
-        let dataspan=dataendFreq-datastartFreq;
-        //初始
-        let centerFreq=datacenterFreq
-        let span=dataspan
-        let zoom=1;
-        if(this.xLabelGridInfo.length>0){
-          let drawInfo=this.xLabelGridInfo[i]
-          if(drawInfo.draw_zoom_freq!==""){
-            centerFreq=drawInfo.draw_zoom_freq
-          }
-          if(drawInfo.draw_zoom!==""){
-            zoom=drawInfo.draw_zoom
-          }
-        }
-
-        //缩放显宽
-        let xspan=Math.floor(span/zoom/2)*2;
-        let startFreq=centerFreq-xspan/2
-        let endFreq=startFreq+xspan
-        let labelCout= this.options.xaxis.number
-        let freqStep=xspan/(labelCout-1)
-        let labelStepPx=xCoutWidth[i]/(labelCout-1)
-
-        if(startFreq&&freqStep){
-          let labels=[];
-          
-          for(let j=0;j<labelCout;j++){
-            var xVal=startFreq+j*freqStep;
-            let labelObj={
-              "text":xVal/1000000,
-              "offsetx":startPointPx+labelStepPx*j
-            };
-            labels.push(labelObj);
-          }
-          this.options.xaxis.labels.push(labels);
-        }
-        let drawAxis={
-          "start_freq": datastartFreq,//X轴起始频率
-          "end_freq": dataendFreq,//X轴结束频率
-          "width":xCoutWidth[i],//X轴绘制宽度
-          "span":dataspan,//当前显示显宽
-          "freqStep":freqStep,//*X轴频率刻度间隔
-          "labelStepPx":labelStepPx,//X轴label间隔像素
-          "show_start_freq":startFreq,//显示起始频率
-          "show_end_freq":endFreq,//显示结束频率
-          "start_x":startPointPx,//*X轴起始位置
-          "end_x":startPointPx+xCoutWidth[i],//*X轴结束位置
-          "drawStepPx":"",//*X轴当前绘制点间隔像素
-          "draw_zoom":zoom,//*缩放层级
-          "draw_zoom_freq":centerFreq,//*缩放位置的频率
-          "draw_zoom_span":xspan//*缩放时显宽
-        }
-        drawArray.push(drawAxis)
-        //增加初始位置
-        startPointPx+=(xCoutWidth[i]+widthVal.spacing)
-      }
-      this.xLabelGridInfo=drawArray
+      this._computeDScanLabels();
     }else{
-      //单频
-      let zoom=1;
-      if(this.options.center_freq!==""&&this.options.span!==""){
-        let centerFreq=this.options.center_freq;
-        let span=this.options.span;
-        if(this.xLabelGridInfo.length>0){
-          let drawInfo=this.xLabelGridInfo[0]
-          if(drawInfo.draw_zoom_freq!==""){
-            centerFreq=drawInfo.draw_zoom_freq
-          }
-          if(drawInfo.draw_zoom!==""){
-            zoom=drawInfo.draw_zoom
-          }
-        }
-        
-        //缩放显宽
-        let xspan=Math.floor(span/zoom/2)*2;
-        let startFreq=centerFreq-xspan/2
-        let endFreq=startFreq+xspan
-        let labelCout=this.options.xaxis.number
-        let freqStep=xspan/(labelCout-1)
-        let labelStepPx=this.chartWidth/(labelCout-1)
-        if(startFreq&&freqStep){
-          let labels=[];
-          for(let j=0;j<this.options.xaxis.number;j++){
-            var xVal=startFreq+j*freqStep;
-            let labelObj={
-              "text":xVal/1000000,
-              "offsetx":labelStepPx*j
-            };
-            labels.push(labelObj);
-          }
-          this.options.xaxis.labels.push(labels);
-        }
-        let drawAxis={
-          "start_freq": this.options.center_freq-this.options.span/2,//X轴初始起始频率
-          "end_freq": this.options.center_freq+this.options.span/2,//X轴初始结束频率
-          "width":this.chartWidth,//X轴绘制宽度
-          "span":this.options.span,//初始显宽
-          "freqStep":freqStep,//*X轴频率刻度间隔
-          "labelStepPx":labelStepPx,//X轴label间隔像素
-          "show_start_freq":startFreq,//显示起始频率
-          "show_end_freq":endFreq,//显示结束频率
-          "start_x":0,//*X轴起始位置
-          "end_x":this.chartWidth,//*X轴结束位置
-          "drawStepPx":"",//*X轴当前绘制点间隔像素
-          "draw_zoom":zoom,//*缩放层级
-          "draw_zoom_freq":centerFreq,//*缩放位置的频率
-          "draw_zoom_span":xspan//*缩放时显宽
-        }
-        this.xLabelGridInfo=[drawAxis]
-      }
+      this._computeFFTLabels();
     }
     
     if(this.options.yaxis.min_value!==""){
@@ -1055,7 +1526,7 @@ class sptmChart {
         this.options.yaxis.zoom_value=this.options.yaxis.min_value+(this.options.yaxis.max_value-this.options.yaxis.min_value)/2;
       }
       for(var i=0;i<yStepLabels.labels.length;i++){
-        let yVal=yStepLabels.labels[i]
+        let yVal=yStepLabels.labels[i];
         let labelObj={
           "text":yVal,
           "offsetY":(yVal-this.options.yaxis.min_value)*yStepLabels.pxStep
@@ -1064,128 +1535,163 @@ class sptmChart {
       }
     }
   }
+  
   /**
-   * 频谱源数据索引值（映射区最右侧点，抽取最大值）
-   * @param {*} dataLen 源数据长度
-   * @param {*} targetIndex 目标索引值
-   * @param {*} targetLen 目标长度
+   * 计算FFT标签
+   * @private
    */
-  selectDataIndex(dataLen,targetIndex,targetLen){
-    if(targetIndex>=dataLen||dataLen==0||targetLen==0){
-      return 0
-    }
-    if(targetLen==1){
-      return Math.floor(dataLen/2)
-    }else if(targetLen==dataLen){
-      return targetIndex
-    }else if(dataLen>targetLen){
-      //源数据长度大于目标长度，则取源数据映射区
-      let order=Math.floor((targetIndex+1)*dataLen/targetLen)-1
-      return order
-    }else{
-      //源数据长度小于目标长度
-      let order=Math.floor(targetIndex*dataLen/targetLen)
-      return order
-    }
-  }
-  /**
-   * 谱线最大点抽点
-   * @param {*} data 源数据
-   * @param {*} dataLen 源数据长度
-   * @param {*} targetLen 目标长度
-   * @return
-   */
-  extractTraceData(data,dataLen,targetLen){
-    let targetData=[];//目标数据
-    let dataIndex=[];//源数据索引值
-    let selectIndex=0;//抽取索引值
-      //抽点最大值
-      let targetCout=0;
-      selectIndex=this.selectDataIndex(dataLen,targetCout,targetLen)
-      let isMaxSelected=false;
-      let maxValue=0;
-      let maxIndex=-1;
-      for(let j=0;j<dataLen;j++){
-        if(isMaxSelected){
-          if(data[j]>maxValue){
-            maxValue=data[j];
-            maxIndex=j;
-          }
-        }else{
-          maxValue=data[j];
-          maxIndex=j;
-          isMaxSelected=true;
-        }
-        if(selectIndex==j){
-          //找到抽取索引值
-          targetData[targetCout]=maxValue;
-          dataIndex[targetCout]=maxIndex;
-          targetCout++;
-          isMaxSelected=false;
-          selectIndex=this.selectDataIndex(dataLen,targetCout,targetLen)
-        }
-      }
+  _computeFFTLabels(){
+    if(this.options.center_freq===""||this.options.span==="")return;
     
-    return {
-      targetData,
-      dataIndex
+    let zoom=1;
+    let centerFreq=this.options.center_freq;
+    
+    if(this.xLabelGridInfo.length>0){
+      const drawInfo=this.xLabelGridInfo[0];
+      if(drawInfo.draw_zoom_freq!=="")centerFreq=drawInfo.draw_zoom_freq;
+      if(drawInfo.draw_zoom!=="")zoom=drawInfo.draw_zoom;
     }
+    
+    const xspan=Math.floor(this.options.span/zoom/2)*2;
+    const startFreq=centerFreq-xspan/2;
+    const endFreq=startFreq+xspan;
+    const labelCout=this.options.xaxis.number;
+    const freqStep=xspan/(labelCout-1);
+    const labelStepPx=this.chartWidth/(labelCout-1);
+    
+    if(startFreq&&freqStep){
+      let labels=[];
+      for(let j=0;j<labelCout;j++){
+        const xVal=startFreq+j*freqStep;
+        labels.push({
+          text:xVal/1000000,
+          offsetx:labelStepPx*j
+        });
+      }
+      this.options.xaxis.labels.push(labels);
+    }
+    
+    this.xLabelGridInfo=[{
+      start_freq:this.options.center_freq-this.options.span/2,
+      end_freq:this.options.center_freq+this.options.span/2,
+      width:this.chartWidth,
+      span:this.options.span,
+      freqStep:freqStep,
+      labelStepPx:labelStepPx,
+      show_start_freq:startFreq,
+      show_end_freq:endFreq,
+      start_x:0,
+      end_x:this.chartWidth,
+      drawStepPx:"",
+      draw_zoom:zoom,
+      draw_zoom_freq:centerFreq,
+      draw_zoom_span:xspan
+    }];
   }
+  
   /**
-   * 保留最大最小方式抽点
-   * @param {*} data 源数据长度
-   * @param {*} dataLen 源数据长度
-   * @param {*} targetLen 目标长度
+   * 计算DScan标签
+   * @private
    */
-  extractTwoPolesTraceLine(data,dataLen,targetLen){
-    let targetData=[];//目标数据
-    let dataIndex=[];//源数据索引值
-    let selectIndex=0;//抽取索引值
-      //抽点最大值
-      let targetCout=0;
-      selectIndex=this.selectDataIndex(dataLen,targetCout,targetLen)
-      let isMaxSelected=false;
-      let maxValue=0;
-      let minValue=0;
-      let minIndex=-1;
-      let maxIndex=-1;
-      for(let j=0;j<dataLen;j++){
-        if(isMaxSelected){
-          if(data[j]>maxValue){
-            maxValue=data[j];
-            maxIndex=j;
-          }
-          if(data[j]<minValue){
-            minValue=data[j];
-            minIndex=j;
-          }
-        }else{
-          maxValue=data[j];
-          minValue=data[j];
-          maxIndex=j;
-          minIndex=j;
-          isMaxSelected=true;
-        }
-        if(selectIndex==j){
-          //找到抽取索引值
-          targetData[targetCout]=[maxValue,minValue];
-          dataIndex[targetCout]=[maxIndex,minIndex];
-          targetCout++;
-          isMaxSelected=false;
-          selectIndex=this.selectDataIndex(dataLen,targetCout,targetLen)
-        }
+  _computeDScanLabels(){
+    const dscan_freq=this.options.xaxis.dscan_freq;
+    const dscan_space=this.options.xaxis.dscan_space;
+    
+    if(!dscan_freq||dscan_freq.length===0)return;
+    
+    const widths=dscan_freq.map(item=>item.width);
+    const widthVal=calculateWidths(this.chartWidth,widths,dscan_space);
+    const xCoutWidth=widthVal.widths;
+    
+    let startPointPx=0;
+    const drawArray=[];
+    
+    for(let i=0;i<dscan_freq.length;i++){
+      const itemdata=dscan_freq[i];
+      const datastartFreq=itemdata.start_freq;
+      const dataendFreq=itemdata.end_freq;
+      const datacenterFreq=datastartFreq+(dataendFreq-datastartFreq)/2;
+      const dataspan=dataendFreq-datastartFreq;
+      
+      let centerFreq=datacenterFreq;
+      let span=dataspan;
+      let zoom=1;
+      
+      if(this.xLabelGridInfo.length>0){
+        const drawInfo=this.xLabelGridInfo[i];
+        if(drawInfo.draw_zoom_freq!=="")centerFreq=drawInfo.draw_zoom_freq;
+        if(drawInfo.draw_zoom!=="")zoom=drawInfo.draw_zoom;
       }
-      return {
-        targetData,
-        dataIndex
+      
+      const xspan=Math.floor(span/zoom/2)*2;
+      const startFreq=centerFreq-xspan/2;
+      const endFreq=startFreq+xspan;
+      const labelCout=this.options.xaxis.number;
+      const freqStep=xspan/(labelCout-1);
+      const labelStepPx=xCoutWidth[i]/(labelCout-1);
+      
+      if(startFreq&&freqStep){
+        let labels=[];
+        for(let j=0;j<labelCout;j++){
+          const xVal=startFreq+j*freqStep;
+          labels.push({
+            text:xVal/1000000,
+            offsetx:startPointPx+labelStepPx*j
+          });
+        }
+        this.options.xaxis.labels.push(labels);
       }
+      
+      drawArray.push({
+        start_freq:datastartFreq,
+        end_freq:dataendFreq,
+        width:xCoutWidth[i],
+        span:dataspan,
+        freqStep:freqStep,
+        labelStepPx:labelStepPx,
+        show_start_freq:startFreq,
+        show_end_freq:endFreq,
+        start_x:startPointPx,
+        end_x:startPointPx+xCoutWidth[i],
+        drawStepPx:"",
+        draw_zoom:zoom,
+        draw_zoom_freq:centerFreq,
+        draw_zoom_span:xspan
+      });
+      //增加初始位置
+      startPointPx+=xCoutWidth[i]+widthVal.spacing;
+    }
+    
+    this.xLabelGridInfo=drawArray;
   }
+  
   //监听事件
   /**
    * 鼠标按下事件
    * @param {*} event 
    */
   mousedown(event) {
+    //先检查是否点击了Marker
+    const rect=this.canvas.getBoundingClientRect();
+    const point={
+      x:event.clientX-rect.left,
+      y:event.clientY-rect.top
+    };
+    
+    const dpiPair={x:96*this.devicePixelRatio,y:96*this.devicePixelRatio};
+    
+    for(const [id,marker] of this._markerList){
+      if(marker.isVisible() && marker.containsPoint(point,dpiPair)){
+        this._markerDragState.isDragging=true;
+        this._markerDragState.dragMarkerId=id;
+        this._markerDragState.lastX=point.x;
+        this._markerDragState.lastY=point.y;
+        this.setMarkerFocus(id);
+        marker.handlePressEvent(point);
+        return;
+      }
+    }
+    
     this.mousedownInfo={
       isMouseDown:true,
       startX:event.offsetX,
@@ -1194,19 +1700,32 @@ class sptmChart {
       mouseupy:0,
       button:event.button
     }
-    if (event.button === 0) { // 左键
-        // isDragging = true;
-        // startY = event.clientY;
-        this.ctx.canvas.style.cursor = 'grabbing';
-    } else if (event.button === 2) { // 右键
-        this.ctx.canvas.style.cursor = 'grab';
+    
+    if (event.button === 0) {
+      this.ctx.canvas.style.cursor = 'grabbing';
+    } else if (event.button === 2) {
+      this.ctx.canvas.style.cursor = 'grab';
     }
   }
+  
   /**
    * 鼠标松开事件
    * @param {*} event
    */
   mouseup(event) {
+    if(this._markerDragState.isDragging){
+      const marker=this._markerList.get(this._markerDragState.dragMarkerId);
+      if(marker){
+        marker.handleReleaseEvent({
+          x:this._markerDragState.lastX,
+          y:this._markerDragState.lastY
+        });
+      }
+      this._markerDragState.isDragging=false;
+      this._markerDragState.dragMarkerId=0;
+      this.draw();
+      return;
+    }
     
     let mousedowinfo={
       isMouseDown:false,
@@ -1220,13 +1739,40 @@ class sptmChart {
     }
     this.ctx.canvas.style.cursor = 'default';
   }
-  /**
+  
+    /**
    * 鼠标移动
    * @param {*} event 
    */
   mousemove(event) {
+    //拖动
+    if(this._markerDragState.isDragging){
+      const rect=this.canvas.getBoundingClientRect();
+      const point={
+        x:event.clientX-rect.left,
+        y:event.clientY-rect.top
+      };
+      
+      const clampedX=Math.max(this.options.grid.left,Math.min(this.width-this.options.grid.right,point.x));
+      const clampedY=Math.max(this.options.grid.top,Math.min(this.height-this.options.grid.bottom,point.y));
+      
+      const marker=this._markerList.get(this._markerDragState.dragMarkerId);
+      if(marker){
+        marker.handleMoveEvent({x:clampedX,y:clampedY});
+        this._updateMarkerData(marker);
+        // 更新标牌锚点位置，确保拖动时标牌跟随
+        marker.setScutchonAnchor({x:clampedX,y:clampedY});
+      }
+      
+      this._markerDragState.lastX=clampedX;
+      this._markerDragState.lastY=clampedY;
+      this.draw();
+      return;
+    }
+    
     let x = event.offsetX;
     let y = event.offsetY;
+    
     if (this.mousedownInfo.isMouseDown) {
       if(this.moveInfo.preX==0){
         this.moveInfo.preX = this.mousedownInfo.startX;
@@ -1234,68 +1780,49 @@ class sptmChart {
       }
       const moveX = event.offsetX - this.moveInfo.preX;
       const moveY = this.moveInfo.preY-event.offsetY;
-      const moveDirX = event.offsetX - this.mousedownInfo.startX;
-      const moveDirY = event.offsetY - this.mousedownInfo.startY;
-      let moveDir = "horizontally";
-      // 判断移动方向
-      if (Math.abs(moveDirX) > Math.abs(moveDirY)) {
-          moveDir = "horizontally";
-          let mouseVal=this.getMouseVal(event);
-          let order=mouseVal.order;
-          if(order==null){
-            //全部水平移动
-          }else{
-            let labelInfo=this.xLabelGridInfo[order];
-            let moveVal=Math.ceil(Math.abs(labelInfo.show_end_freq-labelInfo.show_start_freq)/labelInfo.width*moveX)
-            if(moveVal==0){moveVal=Math.sign(moveY)}
-            let minval=labelInfo.show_start_freq-moveVal
-            let maxval=labelInfo.show_end_freq-moveVal
-            if(minval>=labelInfo.start_freq&&maxval<=labelInfo.end_freq){
-              this.xLabelGridInfo[order].show_start_freq=minval
-              this.xLabelGridInfo[order].show_end_freq=maxval
-              let newCenter=minval+Math.floor((maxval-minval)/2);
-              this.xLabelGridInfo[order].draw_zoom_freq =newCenter;
-              this.drawChart();
-            }
-          }
-          
-      } else {
-          moveDir = "vertically";
-          let moveVal=Math.ceil(Math.abs(this.options.yaxis.max_value-this.options.yaxis.min_value)/this.chartHeight*moveY)
-          if(moveVal==0){moveVal=Math.sign(moveY)}
-          let minval=this.options.yaxis.min_value-moveVal
-          let maxval=this.options.yaxis.max_value-moveVal
-          
-          if(minval>=this.options.yaxis.floor_value&&maxval<=this.options.yaxis.ceiling_value){
-            this.options.yaxis.min_value=minval
-            this.options.yaxis.max_value=maxval
-            console.log("移动更改y值",this.options.yaxis.max_value,this.options.yaxis.min_value)
+      
+      if (Math.abs(moveX) > Math.abs(moveY)) {
+        let mouseVal=this.getMouseVal(event);
+        let order=mouseVal.order;
+        if(order!==null){
+          let labelInfo=this.xLabelGridInfo[order];
+          let moveVal=Math.ceil(Math.abs(labelInfo.show_end_freq-labelInfo.show_start_freq)/labelInfo.width*moveX);
+          if(moveVal==0)moveVal=Math.sign(moveX);
+          let minval=labelInfo.show_start_freq-moveVal;
+          let maxval=labelInfo.show_end_freq-moveVal;
+          if(minval>=labelInfo.start_freq&&maxval<=labelInfo.end_freq){
+            this.xLabelGridInfo[order].show_start_freq=minval;
+            this.xLabelGridInfo[order].show_end_freq=maxval;
+            let newCenter=minval+Math.floor((maxval-minval)/2);
+            this.xLabelGridInfo[order].draw_zoom_freq=newCenter;
+            // 频率范围改变时，更新 Marker 位置
+            this._updateMarkersPositionByFreq();
             this.drawChart();
           }
-      }
-      // 鼠标按下移动
-      if (this.mousedownInfo.button === 0) { // 左键
-        
-      } else if (this.mousedownInfo.button === 2) { // 右键
-        
+        }
+      } else {
+        let moveVal=Math.ceil(Math.abs(this.options.yaxis.max_value-this.options.yaxis.min_value)/this.chartHeight*moveY);
+        if(moveVal==0)moveVal=Math.sign(moveY);
+        let minval=this.options.yaxis.min_value-moveVal;
+        let maxval=this.options.yaxis.max_value-moveVal;
+        if(minval>=this.options.yaxis.floor_value&&maxval<=this.options.yaxis.ceiling_value){
+          this.options.yaxis.min_value=minval;
+          this.options.yaxis.max_value=maxval;
+          // Y 轴范围改变时，如果 Marker 跟随谱线，也需要更新位置
+          this._updateMarkersPositionByFreq();
+          this.drawChart();
+        }
       }
     }else{
-      // 鼠标移动
-      let type=this.getMousePosition()
+      let type=this.getMousePosition(event);
       if(type=="grid"){
         let point=this.getMousePoint(event);
-        //设置鼠标移动坐标
         this.options.level_tipline.point=point;
-        this.drawChart();
-      }else{
-        if(this.options.level_tipline.is_draw){
-          this.options.level_tipline.point.pointx=null;
-          this.options.level_tipline.is_draw=false;
-        }
-        
+        // 使用 draw() 而不是 drawChart()，避免重启定时器导致卡顿
+        this.draw();
       }
-      
     }
+    
     this.moveInfo={
       isMove:true,
       preX:event.offsetX,
@@ -1304,13 +1831,16 @@ class sptmChart {
       moveY:event.offsetY
     }
   }
+
+  
+  
   /**
    * 鼠标移出控件
    * @param {*} event 
    */
   mouseout(event){
     event.preventDefault();
-    this.mousedownInfo.isMouseDown=false
+    this.mousedownInfo.isMouseDown=false;
     this.moveInfo={
       isMove:false,
       preX:0,
@@ -1319,162 +1849,169 @@ class sptmChart {
       moveY:0
     }
   }
+  
   /**
    * 鼠标滚轮事件
    * @param {*} event
    * 
    */
   handleWheel(event) {
-    event.preventDefault(); // 阻止默认滚动行为
-    const delta = event.deltaY < 0 ? 1 : -1; //下滚缩小，上滚放大
-    //const delta = Math.sign(event.deltaY);
+    event.preventDefault();
+    const delta = event.deltaY < 0 ? 1 : -1;
     this.throttle(()=>{
-      console.log("执行频谱节流")
       this.handleZoom(event,delta);
-    })
-    
+    });
   }
+  
   throttle(callback){
     const now=Date.now();
+    if(!this.lastCallTime)this.lastCallTime=0;
     if(now-this.lastCallTime>=this.throttleDelay){
       this.lastCallTime=now;
-      callback()
+      callback();
     }
   }
+  
   /**
    * 双击事件
    * @param {*} event 
    */
   handleDblClick(event) {
     console.log("handleDblClick", event);
+    // 获取当前频率
+    const mouseVal=this.getMouseVal(event);
   }
+  
   /**
    * 点击事件
    * @param {*} event 
    */
   handleClick(event) {
-    console.log("handleClick", event);
-    let points=this.getMousePosition(event)
-    console.log("points",points);
+    const rect=this.canvas.getBoundingClientRect();
+    const point={
+      x:event.clientX-rect.left,
+      y:event.clientY-rect.top
+    };
+    
+    //先尝试点击Marker
+    if(this._handleMarkerClick(point)){
+      return;
+    }
+    
+    //如果没有点击Marker，且在网格区域，移动焦点Marker
+    const type=this.getMousePosition(event);
+    if(type=="grid" && this._focusMarkerId>0){
+      this._moveFocusMarkerToPoint(point);
+    }else if(type !== "grid" && this._focusMarkerId>0 && this.options.marker?.clickBlankToExit){
+      // 如果点击了空白区域且配置了点击空白退出焦点
+      this.exitMarkerFocus();
+    }
   }
+  
   /*
    * 鼠标右键事件
    * @param {*} event
    */
   handleContextMenu(event) {
-    console.log("handleContextMenu", event);
+    event.preventDefault();
+
+    // 检查是否启用了右键菜单
+    if(!this.options.contextMenu?.enabled)return;
+    
+    // 获取右键菜单配置的动作
+    const actions = this.options.contextMenu.actions || ['exitFocus'];
+    
+    // 执行右键菜单动作
+    this._handleContextMenuActions(actions,event);
   }
+  
   /**
    * 按键按下事件
    * @param {*} event
    */
   handleKeydown(event) {
-    //console.log("handleKeydown", event);
     switch (event.keyCode) {
-      case 37: // 左箭头
+      case 37:
         console.log("左箭头");
         break;
-      case 38: // 上箭头
+      case 38:
         console.log("上箭头");
-        this.changeThreshold(+0.5)
         break;
-      case 39: // 右箭头
+      case 39:
         console.log("右箭头");
         break;
-      case 40: // 下箭头
-        this.changeThreshold(-0.5)
-      default:
+      case 40:
+        console.log("下箭头");
         break;
     }
   }
+  
   /**
    * 按键松开事件
    * @param {*} event 
    */
   handleKeyup(event) {
     console.log("handleKeyup按键松开事件", event);
-    switch (event.keyCode) {
-      case 37: // 左箭头
-        console.log("左箭头松开");
-        break;
-      case 38: // 上箭头
-        console.log("上箭头松开");
-        this.options.threshold.is_mouse=false;
-        break;
-      case 39: // 右箭头
-        console.log("右箭头松开");
-        break;
-      case 40: // 下箭头
-        console.log("下箭头松开");
-        this.options.threshold.is_mouse=false;
-      default:
-        break;
-    }
   }
+  
   /**
    * 门限图标鼠标按下事件
    * @param {*} event 
    */
   thresholdMousedown(event) {
-      this.focusType="threshold";
-      this.thresholdFouce=true;
-      
+    this.focusType="threshold";
+    this.thresholdFouce=true;
   }
+  
   /**
    * 门限拖动事件
    * @param {*} event 
    */
   thresholdMousemove(event) {
-      if(this.thresholdFouce){
-        const leves=this.getMouseVal(event,2).y;
-        this.options.threshold.level=leves;
-        //this.drawThreshold();
-        this.drawChart();
-      }
-      
+    if(this.thresholdFouce){
+      const leves=this.getMouseVal(event,2).y;
+      this.options.threshold.level=leves;
+      this.drawChart();
+    }
   }
+  
   /**
    * 门限拖动结束事件
    * @param {*} event 
    */
   thresholdMouseout(event) {
-      //this.focusType="";
-      this.thresholdFouce=false;
-      
+    this.thresholdFouce=false;
   }
+  
   /*
   *显示强度提示框
   */
   tipFreqLevel(data){
     if(this.options.level_tipline.is_draw){
       this.fretipDiv.style.display="block";
-      // if(data.pointx>this.chartWidth/6*5){
-      //   this.fretipDiv.style.right=`${this.width-data.pointx+20}px`;
-      //   this.fretipDiv.style.left=``;
-      // }else{
-      //   this.fretipDiv.style.right=``;
-      //   this.fretipDiv.style.left=`${data.pointx+10}px`;
-      // }
       if(data.pointx - this.options.grid.left > this.chartWidth/2){
-        this.fretipDiv.style.left=``;
+        this.fretipDiv.style.left="";
         this.fretipDiv.style.right=`${this.width-data.pointx+10}px`;
       }else{
-        this.fretipDiv.style.right=``;
+        this.fretipDiv.style.right="";
         this.fretipDiv.style.left=`${data.pointx+10}px`;
       }
       this.fretipDiv.style.top=`${this.options.grid.top+40}px`;
-      let levels=Math.max(...data.y)
-      const centtext=this.options.yaxis.axis_function(levels)
-      if(this.options.level_tipline.freq_visible){
-        this.fretipDiv.innerText=`强度：${centtext}${this.options.yaxis.unit} \n频率：${data.x/1000000} MHz`
-      }else{
-        this.fretipDiv.innerText=`强度：${centtext}${this.options.yaxis.unit}`
+      let levels=Math.max(...data.y);
+      let centtext=this.options.yaxis.axis_function(levels);
+      if(isNaN(centtext)){
+        centtext="--";
       }
-      //this.fretipDiv.innerText=`强度：${centtext}${this.options.yaxis.unit} 频率：${data.x} MHz`
+      if(this.options.level_tipline.freq_visible){
+        this.fretipDiv.innerText=`强度：${centtext}${this.options.yaxis.unit} \n频率：${data.x/1000000} MHz`;
+      }else{
+        this.fretipDiv.innerText=`强度：${centtext}${this.options.yaxis.unit}`;
+      }
     }else{
       this.fretipDiv.style.display="none";
     }
   }
+  
   /**
    * 单频设置中心频率和显宽
    * @param {*} centerFre 
@@ -1484,6 +2021,7 @@ class sptmChart {
     this.options.center_freq = centerFre;
     this.options.span = span;
   }
+  
   /**
    * 单频
    * @returns 获取中心频率和显宽
@@ -1494,13 +2032,15 @@ class sptmChart {
       span:this.options.span
     }
   }
+  
   /**
    * 窗口大小改变事件
    */
   resizeCanvas() {
-    this.setCanvasSize(); // 重新设置 Canvas 尺寸
-    this.draw(); // 重新绘制图表以适应新尺寸
+    this.setCanvasSize();
+    this.draw();
   }
+  
   /**
    * 设置图表大小
    * @param {*} widhts 宽度
@@ -1508,12 +2048,13 @@ class sptmChart {
    */
   setChartSize(widths, heights){
     if(widths&&heights){
-      this.options.width=widths
-      this.options.height=heights
+      this.options.width=widths;
+      this.options.height=heights;
     }
-    this.setCanvasSize(widths, heights)
-    this.draw(); // 重新绘制图表以适应新尺寸
+    this.setCanvasSize(widths, heights);
+    this.draw();
   }
+  
   /**
    * 修改门限值
    * @param {*} num
@@ -1524,10 +2065,10 @@ class sptmChart {
       this.options.threshold.is_mouse=true;
       if(newLevel<=this.options.yaxis.max_value&&newLevel>=this.options.yaxis.min_value){
         this.options.threshold.level = newLevel;
-        
       }
     }
   }
+  
   /**
    * 设置门限值
    * @param {*} level 
@@ -1535,6 +2076,7 @@ class sptmChart {
   setThresholdLevel(level){
     this.options.threshold.level=level;
   }
+  
   /**
    * 获取门限值
    * @returns 门限值
@@ -1542,6 +2084,7 @@ class sptmChart {
   getThresholdLevel(){
     return this.options.threshold.level;
   }
+  
   /**
    * 门限是否显示
    * @param {*} isShow 
@@ -1549,6 +2092,7 @@ class sptmChart {
   setThresholdShow(isShow){
     this.options.threshold.visible=isShow;
   }
+  
   /**
    * 设置门限属性
    * @param {*} options
@@ -1557,6 +2101,7 @@ class sptmChart {
     let oldattr = deepMerge({},this.options.threshold);
     this.options.threshold = deepMerge(oldattr,options);
   }
+  
   /**
    * 缩放事件
    * @param {*} event 
@@ -1565,30 +2110,25 @@ class sptmChart {
    * @returns 
    */
   handleZoom(event,delta) {
-    let type=this.getMousePosition()
-    //console.log("handleZoom",event, delta,type);
-    const zoomFactor = 1.1;// 缩放因子
+    let type=this.getMousePosition(event);
+    const zoomFactor = 1.1;
     
     if(type=="left"){
       let newZoom = this.yZoom+delta;
       let maxZoom = this.options.yaxis.fixedStep;
-      let initMaxStep = (this.options.yaxis.ceiling_value-this.options.yaxis.floor_value)/(this.options.yaxis.number-1)
+      let initMaxStep = (this.options.yaxis.ceiling_value-this.options.yaxis.floor_value)/(this.options.yaxis.number-1);
       if(newZoom<1){
-        newZoom=1
+        newZoom=1;
         return false;
       }
       if(newZoom>initMaxStep){
-        newZoom=initMaxStep
+        newZoom=initMaxStep;
       }
-      let stepVal=Math.round(initMaxStep/newZoom)
-      
-      if(stepVal<1){
-        console.log("步进小于1")
-        return false;
-      }
+      let stepVal=Math.round(initMaxStep/newZoom);
+      if(stepVal<1)return false;
       let nowCout=stepVal*(this.options.yaxis.number-1);
       let mouseVal=this.getMouseVal(event,0).y;
-      let minValue=Math.round(mouseVal-(mouseVal-this.options.yaxis.min_value)/(this.options.yaxis.max_value-this.options.yaxis.min_value)*nowCout)
+      let minValue=Math.round(mouseVal-(mouseVal-this.options.yaxis.min_value)/(this.options.yaxis.max_value-this.options.yaxis.min_value)*nowCout);
       let maxValue=Math.floor(minValue+nowCout);
       if(minValue<this.options.yaxis.floor_value){
         minValue=this.options.yaxis.floor_value;
@@ -1598,39 +2138,29 @@ class sptmChart {
         maxValue=this.options.yaxis.ceiling_value;
         minValue=maxValue-nowCout;
       }
-      console.log("y轴计算范围",maxValue,minValue,newZoom)
       if(minValue>=this.options.yaxis.floor_value&&maxValue<=this.options.yaxis.ceiling_value&&maxValue-minValue>=(this.options.yaxis.number-1)){
-          this.options.yaxis.min_value=minValue;
-          this.options.yaxis.max_value=maxValue;
-          this.yZoom=newZoom;
-          console.log("y轴缩放步进值",stepVal,this.options.yaxis.number-1,minValue,maxValue)
-          console.log("y轴缩放范围",this.options.yaxis.max_value,this.options.yaxis.min_value,newZoom)
+        this.options.yaxis.min_value=minValue;
+        this.options.yaxis.max_value=maxValue;
+        this.yZoom=newZoom;
       }
-     }else if(type=="bottom"){
-      //x轴缩放计算
+    }else if(type=="bottom" || type=="grid"){
       let mouseVal=this.getMouseVal(event,0);
       if(mouseVal.order!==null){
         let order=mouseVal.order;
         let labelInfo=this.xLabelGridInfo[order];
         let initSpan=labelInfo.span;
-        let newZoom=labelInfo.draw_zoom+delta*2**2;
+        let newZoom=labelInfo.draw_zoom+delta*4;
         let zoomSpan = Math.floor(initSpan /newZoom/2)*2;
-        if(zoomSpan>initSpan){
-          return false;
-        }else if (zoomSpan < 6) {
-          return false;
-        }
+        if(zoomSpan>initSpan)return false;
+        if(zoomSpan < 6)return false;
         let centerVal=mouseVal.x;
-        let minValue=Math.floor(centerVal-(centerVal-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*zoomSpan)
+        let minValue=Math.floor(centerVal-(centerVal-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*zoomSpan);
         let maxValue=Math.floor(minValue+zoomSpan);
         if(minValue<labelInfo.start_freq){
-          console.log("处理超过最小值",minValue)
           minValue=labelInfo.start_freq;
           maxValue=Math.floor(minValue+zoomSpan);
         }
         if(maxValue>labelInfo.end_freq){
-          console.log("处理超过最大值",maxValue)
-          
           maxValue=labelInfo.end_freq;
           minValue=Math.ceil(maxValue-zoomSpan);
         }
@@ -1638,29 +2168,26 @@ class sptmChart {
           this.xLabelGridInfo[order].draw_zoom = newZoom;
           let newCenter=minValue+Math.floor((maxValue-minValue)/2);
           this.xLabelGridInfo[order].draw_zoom_freq =newCenter;
-          console.log("bottom newZoom 缩放中心频率",newCenter,newZoom,"显宽",zoomSpan)
         }
-        
       }
-      
     }
     
     this.drawChart();
   }
+  
   /**
    * 获取鼠标位置对应的值
    * @param {*} event 
    * @returns 
    */
   getMouseVal(event,digit=0){
-    // let pointx = event.offsetX;
-    // let pointy = event.offsetY;
-    const rect = this.canvas.getBoundingClientRect(); // 获取 Canvas 的位置和大小
-    let pointx = event.clientX - rect.left; // 计算鼠标相对于 Canvas 的 X 坐标
-    let pointy = event.clientY - rect.top; // 计算鼠标相对于 Canvas 的 Y 坐标
-    let x=null;//x轴频率
-    let y=null;//y轴频率
-    let order =null;//x轴标签组序号
+    const rect = this.canvas.getBoundingClientRect();
+    let pointx = event.clientX - rect.left;
+    let pointy = event.clientY - rect.top;
+    let x=null;
+    let y=null;
+    let order =null;
+    
     if(pointy<this.options.grid.top){
       y=this.options.yaxis.max_value;
     }else if(pointy>this.height-this.options.grid.bottom){
@@ -1670,48 +2197,77 @@ class sptmChart {
     }
 
     if(pointx<this.options.grid.left){
-      x=this.xLabelGridInfo[0].show_start_freq;
-      order=0
+      x=this.xLabelGridInfo[0]?.show_start_freq||0;
+      order=0;
     }else{
       pointx=pointx-this.options.grid.left;
       for(let i=0;i<this.xLabelGridInfo.length;i++){
         if(pointx>=this.xLabelGridInfo[i].start_x&&pointx<=this.xLabelGridInfo[i].end_x){
           x=this.xLabelGridInfo[i].show_start_freq+(pointx-this.xLabelGridInfo[i].start_x)/this.xLabelGridInfo[i].width*(this.xLabelGridInfo[i].show_end_freq-this.xLabelGridInfo[i].show_start_freq);
-          x=Math.floor(x)
+          x=Math.floor(x);
           order=i;
           break;
         }
       }
     }
+    
     if(digit==0){
       y=Math.floor(y);
     }else{
-      y=y.toFixed(digit)*1;
+      y=parseFloat(y.toFixed(digit));
     }
+    
     return {x,y,order};
+  }
+  
+  /**
+   * 获取当前鼠标位置信息
+   * @param {Object} event - 鼠标事件
+   * @returns {Object} 位置信息 {x, y, freq, level, rawFreq, rawLevel}
+   */
+  getMousePositionInfo(event){
+    const mouseVal = this.getMouseVal(event, 2);
+    const mouseLevel = this.getMousePositionLevel({
+      pointx: event.offsetX,
+      pointy: event.offsetY
+    });
+    
+    return {
+      x: mouseVal.x,
+      y: mouseVal.y,
+      freq: mouseVal.x ? (mouseVal.x / 1000000).toFixed(6) + ' MHz' : '--',
+      level: mouseLevel.y && mouseLevel.y.length > 0 
+        ? Math.max(...mouseLevel.y).toFixed(2) + ' ' + (this.options.yaxis.unit || 'dBμV')
+        : '--',
+      rawFreq: mouseVal.x,
+      rawLevel: mouseLevel.y && mouseLevel.y.length > 0 ? Math.max(...mouseLevel.y) : null
+    };
   }
   /**
    * 获取当前鼠标所在位置频率和强度
    * @param {*} event 
    */
   getMousePoint(event,digit=0){
-    const rect = this.canvas.getBoundingClientRect(); // 获取 Canvas 的位置和大小
-    let pointx = event.clientX - rect.left; // 计算鼠标相对于 Canvas 的 X 坐标
-    let pointy = event.clientY - rect.top; // 计算鼠标相对于 Canvas 的 Y 坐标
-    return{pointx,pointy}
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      pointx:event.clientX-rect.left,
+      pointy:event.clientY-rect.top
+    };
   }
+  
   /**
    * 获取鼠标当前强度
    * @param {*} data 点坐标
    * @returns 
    */
   getMousePositionLevel(data){
-    let pointx=data.pointx
-    let pointy=data.pointy
-    let x=null;//x轴频率
-    let xorder =null;//x轴线数据序号
-    let y=[];//y轴强度
-    let order =null;//x轴段序号
+    let pointx=data.pointx;
+    let pointy=data.pointy;
+    let x=null;
+    let xorder =null;
+    let y=[];
+    let order =null;
+    
     if(pointx<this.options.grid.left||pointx>this.options.grid.left+this.chartWidth){
       return {x,y,xorder,order,pointx,pointy};
     }else{
@@ -1719,26 +2275,24 @@ class sptmChart {
       for(let i=0;i<this.xLabelGridInfo.length;i++){
         if(diff_x>=this.xLabelGridInfo[i].start_x&&diff_x<=this.xLabelGridInfo[i].end_x){
           if(this.xLabelGridInfo[i].lineType=="step"){
-            diff_x=diff_x-this.xLabelGridInfo[i].drawStepPx/2
-            if(diff_x<0){
-              diff_x=0;
-            }
+            diff_x=diff_x-this.xLabelGridInfo[i].drawStepPx/2;
+            if(diff_x<0)diff_x=0;
           }
           x=this.xLabelGridInfo[i].show_start_freq+(diff_x-this.xLabelGridInfo[i].start_x)/this.xLabelGridInfo[i].width*(this.xLabelGridInfo[i].show_end_freq-this.xLabelGridInfo[i].show_start_freq);
-          x=Math.floor(x)
+          x=Math.floor(x);
           order=i;
-          if(this.tracesData[0].datainfo[i]==undefined||this.tracesData[0].datainfo[i]==null){
-            y=[]
+          if(this.tracesData[0]?.datainfo[i]==undefined||this.tracesData[0].datainfo[i]?.data==undefined){
+            y=[];
             break;
           }
-          xorder=Math.round((x-this.xLabelGridInfo[i].start_freq)/(this.xLabelGridInfo[i].end_freq-this.xLabelGridInfo[i].start_freq)*(this.tracesData[0].datainfo[i].data.length-1));
+          xorder=Math.round((x-this.xLabelGridInfo[i].start_freq)/(this.xLabelGridInfo[i].end_freq-this.xLabelGridInfo[i].start_freq)*(this.tracesData[0].datainfo[i]?.data.length-1));
           if(xorder!==undefined&&xorder!==null){
-            for (let j = 0; j < this.tracesData.length; j++) {
-                let linedata=this.tracesData[j].datainfo[order].data
-                y.push(linedata[xorder]);
+            for (let j = 0; j < this.tracesData.length; j++){
+              let linedata=this.tracesData[j].datainfo[order]?.data;
+              if(linedata)y.push(linedata[xorder]);
             }
           }else{
-            y=[]
+            y=[];
           }
           break;
         }
@@ -1746,40 +2300,43 @@ class sptmChart {
       return {x,y,xorder,order,pointx,pointy};
     }
   }
+  
   /**
    * 获取鼠标当前区域
    * @param {*} event 
    * @returns 
    */
   getMousePosition(events) {
-    var event = window.event;
-    const rect = this.canvas.getBoundingClientRect(); // 获取 Canvas 的位置和大小
-    const x = event.clientX - rect.left; // 计算鼠标相对于 Canvas 的 X 坐标
-    const y = event.clientY - rect.top; // 计算鼠标相对于 Canvas 的 Y 坐标
-    var result=""
-    // 检查鼠标是否在 Canvas 内部
+    var event = window.event||events;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    var result="";
+    
     if (x < 0 || x > this.width || y < 0 || y > this.height) {
-        result=null;
+      result=null;
     }else if (x < this.options.grid.left) {
-        result="left";
+      result="left";
     } else if (y < this.options.grid.top) {
-        result="top";
+      result="top";
     } else if (x > this.canvas.width - this.options.grid.right) {
-        result="right";
+      result="right";
     } else if (y > this.canvas.height - this.options.grid.bottom) {
-        result="bottom";
+      result="bottom";
     } else {
-        result="grid";
+      result="grid";
     }
     this.focusType=result;
     return result;
   }
+  
   /**
    * 获取配置
    */
   getOptions(){
     return this.options;
   }
+  
   /**
    * 设置配置项
    * @param {*} options 
@@ -1788,12 +2345,549 @@ class sptmChart {
     let newoptions = deepMerge(this.options,options);
     this.initOptions(newoptions);
   }
-}
+  
 
+
+
+
+
+
+
+
+
+
+
+  //========== Marker公共API ==========
+  
+    /**
+   * 添加 Marker
+   * @param {boolean} isShow - 是否显示
+   * @param {boolean} isFocus - 是否获取焦点
+   * @param {number} traceId - 跟随的谱线 ID，不传或 0 表示第一条谱线
+   * @returns {number} Marker ID
+   */
+  addMarker(isShow=true, isFocus=true, traceId=0){
+    const maxCount=this.options.marker?.maxCount||10;
+    if(this._markerList.size>=maxCount){
+      return 0;
+    }
+    
+    const id=this._nextMarkerId++;
+    
+    const sceneRect={
+      x:this.options.grid.left,
+      y:this.options.grid.top,
+      width:this.chartWidth,
+      height:this.chartHeight
+    };
+    
+    const markerOptions={
+      shape:this.options.marker?.shape||0,
+      verticalLine:this.options.marker?.verticalLine!==false,
+      crossLine:this.options.marker?.crossLine||false,
+      scutchonVisible:this.options.marker?.scutchonVisible!==false,//是否显示标牌
+      followTraceY:this.options.marker?.followTraceY||false,  // 跟随谱线 Y 轴位置
+      traceYOffset:this.options.marker?.traceYOffset||-10,    // 谱线 Y 轴偏移
+      traceId: traceId || 0,  // 跟随的谱线 ID，0 表示第一条
+      colorGroup:this.options.marker?.colorGroup
+    };
+    
+    const marker=new MarkerItem(id,sceneRect,markerOptions);
+    marker.setVisible(isShow);
+    
+    //设置碰撞检测
+    marker.setCollidingFunc((m,sourceRect,advisedRect)=>{
+      const otherMarkers=this.getMarkerList(true).filter(item=>item!==m);
+      const result=MarkerItem.getAdvisedRect(sourceRect,otherMarkers,sceneRect);
+      Object.assign(advisedRect,result);
+    });
+    
+    //事件回调
+    marker.onFocusChanged((focus)=>{
+      if(focus){
+        this._focusMarkerId=id;
+        this._markerList.forEach((item,mid)=>{
+          if(mid!==id && item.hasFocus()){
+            item.setFocus(false);
+          }
+        });
+      }
+      this.draw();
+    });
+    
+    marker.onVisibleChanged(()=>this.draw());
+    marker.onMarkerPtChanged(()=>this.draw());
+    
+    this._markerList.set(id,marker);
+    
+    if(isFocus){
+      this.setMarkerFocus(id);
+    }
+    
+    //初始化位置（中心）
+    if(this.chartWidth>0 && this.chartHeight>0){
+      const centerX=this.options.grid.left+this.chartWidth/2;
+      const centerY=this.options.grid.top+this.chartHeight/2;
+      marker.setMarkerPt({x:centerX,y:centerY});
+      marker.setScutchonAnchor({x:centerX,y:centerY});
+    }
+    
+    this.draw();
+    return id;
+  }
+
+  
+  /**
+   * 删除Marker
+   * @param {number} id - Marker ID，0表示删除最后添加的
+   * @returns {boolean} 是否成功
+   */
+  deleteMarker(id=0){
+    if(id===0){
+      const lastId=Math.max(...this._markerList.keys(),0);
+      if(lastId>0){
+        this._markerList.delete(lastId);
+        if(this._focusMarkerId===lastId){
+          this._focusMarkerId=0;
+        }
+        this.draw();
+        return true;
+      }
+      return false;
+    }
+    
+    if(!this._markerList.has(id))return false;
+    this._markerList.delete(id);
+    if(this._focusMarkerId===id){
+      this._focusMarkerId=0;
+    }
+    this.draw();
+    return true;
+  }
+  
+  /**
+   * 设置Marker显示状态
+   * @param {number} id - Marker ID
+   * @param {boolean} isShow - 是否显示
+   * @returns {boolean} 是否成功
+   */
+  setMarkerShow(id,isShow){
+    const marker=this._markerList.get(id);
+    if(!marker)return false;
+    marker.setVisible(isShow);
+    this.draw();
+    return true;
+  }
+  
+  /**
+   * 设置Marker焦点
+   * @param {number} id - Marker ID
+   * @returns {boolean} 是否成功
+   */
+  setMarkerFocus(id){
+    const marker=this._markerList.get(id);
+    if(!marker)return false;
+    
+    for(const [mid,m] of this._markerList){
+      if(mid!==id){
+        m.setFocus(false);
+      }
+    }
+    
+    marker.setFocus(true);
+    this._focusMarkerId=id;
+    this.draw();
+    return true;
+  }
+  
+  /**
+   * 获取焦点Marker ID
+   * @returns {number} 焦点Marker ID
+   */
+  getMarkerFocusId(){
+    return this._focusMarkerId;
+  }
+  
+  /**
+   * 移动Marker到指定频率
+   * @param {number} id - Marker ID
+   * @param {number} freqHz - 目标频率(Hz)
+   * @returns {boolean} 是否成功
+   */
+  moveMarkerByFreq(id,freqHz){
+    const marker=this._markerList.get(id);
+    if(!marker)return false;
+    
+    const x=this._freqToX(freqHz);
+    if(x===null)return false;
+    
+    const currentPt=marker.markerPt();
+    marker.setMarkerPt({x,y:currentPt.y});
+    marker.setScutchonAnchor({x,y:currentPt.y});
+    marker.setFrequency(freqHz);
+    
+    this._updateMarkerData(marker);
+    this.draw();
+    return true;
+  }
+  
+  /**
+   * 获取Marker当前频率
+   * @param {number} id - Marker ID，0表示获取焦点Marker
+   * @returns {number} 频率(Hz)
+   */
+  getMarkerFreq(id=0){
+    if(id===0)id=this._focusMarkerId;
+    const marker=this._markerList.get(id);
+    return marker?marker.getFrequency():0;
+  }
+  
+  /**
+   * 设置Marker颜色
+   * @param {number} id - Marker ID，0表示所有
+   * @param {number} colorType - 颜色类型 0-7
+   * @param {string} color - 颜色值
+   * @returns {boolean} 是否成功
+   */
+  setMarkerColor(id,colorType,color){
+    const colorMap={
+      0:'noFocusBackground',
+      1:'activeForeground',
+      2:'inactiveForeground',
+      3:'crossBorderText',
+      4:'scutchonBackground',
+      5:'scutchonForeground',
+      6:'lineColor',
+      7:'focusBackground'
+    };
+    
+    const colorKey=colorMap[colorType];
+    if(!colorKey)return false;
+    
+    if(id===0){
+      this._markerList.forEach(marker=>{
+        const colorGroup=marker.getColorGroup();
+        colorGroup[colorKey]=color;
+        marker.setColorGroup(colorGroup);
+      });
+    }else{
+      const marker=this._markerList.get(id);
+      if(!marker)return false;
+      const colorGroup=marker.getColorGroup();
+      colorGroup[colorKey]=color;
+      marker.setColorGroup(colorGroup);
+    }
+    this.draw();
+    return true;
+  }
+  
+  /**
+   * 获取所有Marker列表
+   * @param {boolean} onlyVisible - 是否仅显示可见的
+   * @returns {Array} Marker数组
+   */
+  getMarkerList(onlyVisible=false){
+    const list=[];
+    for(const [id,marker] of this._markerList){
+      if(!onlyVisible || marker.isVisible()){
+        list.push(marker);
+      }
+    }
+    return list;
+  }
+  
+  /**
+   * 清除所有Marker
+   */
+  clearAllMarkers(){
+    this._markerList.clear();
+    this._focusMarkerId=0;
+    this._nextMarkerId=1;
+    this.draw();
+  }
+  
+    /**
+   * 设置 Marker 全局可见性
+   * @param {boolean} visible - 是否可见
+   */
+  setMarkerGlobalVisible(visible){
+    if(this.options.marker){
+      this.options.marker.visible=visible;
+    }
+    this.draw();
+  }
+  
+  /**
+   * 设置 Marker 跟随的谱线 ID
+   * @param {number} markerId - Marker ID
+   * @param {number} traceId - 谱线 ID，0 表示第一条谱线
+   * @returns {boolean} 是否成功设置
+   */
+  setMarkerTraceId(markerId, traceId=0){
+    const marker = this._markerList.get(markerId);
+    if(!marker) return false;
+    
+    marker.setTraceId(traceId || 0);
+    this._updateMarkerData(marker);
+    this.draw();
+    return true;
+  }
+
+  /**
+   * 获取 Marker 当前跟随的谱线 ID
+   * @param {number} markerId - Marker ID，0 表示焦点 Marker
+   * @returns {number} 谱线 ID，失败返回 -1
+   */
+  getMarkerTraceId(markerId=0){
+    if(markerId === 0) markerId = this._focusMarkerId;
+    if(markerId === 0) return -1;
+    
+    const marker = this._markerList.get(markerId);
+    return marker ? marker.getTraceId() : -1;
+  }
+
+  /**
+   * 获取所有可用谱线 ID 列表
+   * @returns {Array} 谱线 ID 数组
+   */
+  getAvailableTraceIds(){
+    return this.tracesData
+      .filter(trace => trace.visible)
+      .map(trace => trace.id);
+  }
+
+  /**
+   * 退出 Marker 焦点
+   * @returns {boolean} 是否成功退出
+   */
+  exitMarkerFocus(){
+    if(this._focusMarkerId === 0)return false;
+    
+    const marker = this._markerList.get(this._focusMarkerId);
+    if(marker){
+      marker.setFocus(false);
+    }
+    
+    this._focusMarkerId = 0;
+    this.draw();
+    return true;
+  }
+  
+  /**
+   * 检查是否有焦点 Marker
+   * @returns {boolean} 是否有焦点
+   */
+  hasMarkerFocus(){
+    return this._focusMarkerId > 0;
+  }
+
+    /**
+   * 处理右键菜单动作
+   * @private
+   */
+  _handleContextMenuActions(actions,event){
+    if(!actions || !Array.isArray(actions))return;
+    
+    actions.forEach(action => {
+      // 支持字符串类型的内置动作
+      if(typeof action === 'string'){
+        switch(action){
+          case 'exitFocus':
+            this.exitMarkerFocus();
+            break;
+          case 'clearMarkers':
+            this.clearAllMarkers();
+            break;
+          case 'getPosition':
+            // 获取当前鼠标位置信息
+            const mouseVal = this.getMouseVal(event, 2);
+            const mouseLevel = this.getMousePositionLevel({
+              pointx: event.offsetX,
+              pointy: event.offsetY
+            });
+            
+            const positionInfo = {
+              x: mouseVal.x,
+              y: mouseVal.y,
+              freq: mouseVal.x ? (mouseVal.x / 1000000).toFixed(6) + ' MHz' : '--',
+              level: mouseLevel.y && mouseLevel.y.length > 0 
+                ? Math.max(...mouseLevel.y).toFixed(2) + ' ' + (this.options.yaxis.unit || 'dBμV')
+                : '--',
+              rawFreq: mouseVal.x,
+              rawLevel: mouseLevel.y && mouseLevel.y.length > 0 ? Math.max(...mouseLevel.y) : null
+            };
+            
+            // 如果配置了回调，则调用回调
+            if(this.options.contextMenu?.onGetPosition){
+              this.options.contextMenu.onGetPosition(positionInfo, event);
+            }
+            console.log('当前位置信息:', positionInfo);
+            break;
+          case 'custom':
+            // 触发自定义事件
+            if(this.options.contextMenu?.onCustomAction){
+              this.options.contextMenu.onCustomAction(null, event, {
+                chart: this,
+                mouseVal: this.getMouseVal(event),
+                focusMarkerId: this._focusMarkerId
+              });
+            }
+            break;
+        }
+      }
+      // 支持对象类型的自定义动作
+      else if(typeof action === 'object' && action !== null){
+        const { type, label, handler } = action;
+        
+        // 如果是 getPosition 类型，自动获取位置信息
+        if(type === 'getPosition'){
+          const mouseVal = this.getMouseVal(event, 2);
+          const mouseLevel = this.getMousePositionLevel({
+            pointx: event.offsetX,
+            pointy: event.offsetY
+          });
+          
+          const positionInfo = {
+            x: mouseVal.x,
+            y: mouseVal.y,
+            freq: mouseVal.x ? (mouseVal.x / 1000000).toFixed(6) + ' MHz' : '--',
+            level: mouseLevel.y && mouseLevel.y.length > 0 
+              ? Math.max(...mouseLevel.y).toFixed(2) + ' ' + (this.options.yaxis.unit || 'dBμV')
+              : '--',
+            rawFreq: mouseVal.x,
+            rawLevel: mouseLevel.y && mouseLevel.y.length > 0 ? Math.max(...mouseLevel.y) : null
+          };
+          
+          // 如果有自定义 handler，调用它
+          if(handler && typeof handler === 'function'){
+            handler(positionInfo, event, { chart: this });
+          }
+          // 否则使用默认回调
+          else if(this.options.contextMenu?.onGetPosition){
+            this.options.contextMenu.onGetPosition(positionInfo, event);
+          }
+        }
+        // 其他自定义类型
+        else if(handler && typeof handler === 'function'){
+          handler(event, {
+            chart: this,
+            mouseVal: this.getMouseVal(event),
+            focusMarkerId: this._focusMarkerId
+          });
+        }
+      }
+    });
+  }
+
+  // ========== 中心频率信息框 API ==========
+  
+  /**
+   * 设置中心频率信息框显示状态
+   * @param {boolean} visible - 是否显示
+   */
+  setCenterInfoVisible(visible){
+    if(this.options.centerinfo){
+      this.options.centerinfo.visible = visible;
+    }
+    this.draw();
+  }
+  
+  /**
+   * 获取中心频率信息框显示状态
+   * @returns {boolean} 是否显示
+   */
+  isCenterInfoVisible(){
+    return this.options.centerinfo?.visible || false;
+  }
+  
+  /**
+   * 设置中心频率信息框位置
+   * @param {string} position - 位置：top-left, top-center, top-right, bottom-left, bottom-center, bottom-right
+   */
+  setCenterInfoPosition(position){
+    if(this.options.centerinfo){
+      this.options.centerinfo.position = position;
+    }
+    this.draw();
+  }
+  
+  /**
+   * 设置中心频率信息框偏移量
+   * @param {number} offsetX - X 方向偏移
+   * @param {number} offsetY - Y 方向偏移
+   */
+  setCenterInfoOffset(offsetX, offsetY){
+    if(this.options.centerinfo){
+      this.options.centerinfo.offsetX = offsetX;
+      this.options.centerinfo.offsetY = offsetY;
+    }
+    this.draw();
+  }
+  
+  /**
+   * 设置中心频率信息框背景颜色
+   * @param {string} color - 颜色值
+   */
+  setCenterInfoBackground(color){
+    if(this.options.centerinfo){
+      this.options.centerinfo.background = color;
+    }
+    this.draw();
+  }
+  
+  /**
+   * 设置中心频率信息框文本颜色
+   * @param {string} color - 颜色值
+   */
+  setCenterInfoTextColor(color){
+    if(this.options.centerinfo){
+      this.options.centerinfo.text_color = color;
+    }
+    this.draw();
+  }
+  
+  /**
+   * 设置中心频率信息框字体大小
+   * @param {number} size - 字体大小（像素）
+   */
+  setCenterInfoFontSize(size){
+    if(this.options.centerinfo){
+      this.options.centerinfo.font_size = size;
+    }
+    this.draw();
+  }
+  
+  /**
+   * 设置中心频率信息框显示内容
+   * @param {Object} config - 配置对象
+   * @param {boolean} config.show_center_freq - 显示中心频率
+   * @param {boolean} config.show_current_freq - 显示当前频率
+   * @param {boolean} config.show_level - 显示强度
+   */
+  setCenterInfoContent(config){
+    if(this.options.centerinfo){
+      if(config.show_center_freq !== undefined){
+        this.options.centerinfo.show_center_freq = config.show_center_freq;
+      }
+      if(config.show_current_freq !== undefined){
+        this.options.centerinfo.show_current_freq = config.show_current_freq;
+      }
+      if(config.show_level !== undefined){
+        this.options.centerinfo.show_level = config.show_level;
+      }
+
+    }
+    this.draw();
+  }
+
+
+
+
+}
 
 // Compatibility for ES5 environments
 // if (typeof module !== 'undefined' && module.exports) {
 //   module.exports = sptmChart;
 // }
-
+export {MarkerItem, sptmChart};
 export default sptmChart;

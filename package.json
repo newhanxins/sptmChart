@@ -4,12 +4,14 @@
   "description": "",
   "main": "dist/sptmChart.js",
   "module": "dist/sptmChart.esm.js",
+  "files": ["dist"],
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "babel": "babel src -d lib",
     "minify": "terser lib/sptmChart.js -o lib/sptmChart.min.js",
     "build": "rollup -c",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "dev": "rollup -c -w"
   },
   "keywords": [],
   "author": "",

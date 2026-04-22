@@ -61,7 +61,6 @@ function getDevicePixelRatio() {
  * @returns 
  */
 function calculateStepValues(width,minValue, maxValues, fixedStep,zooms,stepStart, stepEnd,labelnum) {
-  console.log("计算",width,minValue, maxValues, fixedStep,zooms,stepStart, stepEnd,labelnum)
   let labels = [];
   let gridLabels=[]
   let zoom=zooms||1;
@@ -73,7 +72,6 @@ function calculateStepValues(width,minValue, maxValues, fixedStep,zooms,stepStar
   let labelStep =width
   
   let maxValue = minValue+stepValue*(labelnum-1);
-  console.log("计算步进值",stepValue,labelnum-1,minValue,maxValue,"传入最大值",maxValues)
   let gridstepValue=stepValue/2
   // 从第一个步进值开始，找到在 minValue 和 maxValue 范围内的所有步进值
   for (let value = stepStart; value <= stepEnd; value += stepValue) {
