@@ -1,6 +1,7 @@
 import './index.css'
 import {deepMerge,deepCopy,calculateStepValues,calculateWidths,truncateNumber} from './utils'
 import { MarkerItem } from './module/MarkerItem.js'
+import { Waterfall } from './module/Waterfall.js'
 
 /**
  * sptmChart 频谱控件
@@ -39,6 +40,10 @@ class sptmChart {
       lastX:0,
       lastY:0
     };
+
+    // 瀑布图模块初始化
+    this._waterfall = new Waterfall(this);
+    this._waterfall.applyConfig(this.options.waterfall);
     //=====================================
     
     this.chartWidth = 0;//图表宽度
@@ -700,6 +705,30 @@ class sptmChart {
           "pointx": 0,//鼠标所在 x 轴坐标
           "pointy": 0,//鼠标所在 y 轴坐标
         },
+      },
+      // 图表绘制类型：'line'（默认，传统线图）| 'waterfall'（瀑布图）
+      "chart_type": "line",
+      // 瀑布图配置（仅 chart_type='waterfall' 时生效）
+      "waterfall": {
+        "max_rows": 100,               // 最大存储数据条数，默认 100
+        "time_interval": 5,            // 当前时间刻度间隔（秒）
+        "time_interval_min": 1,        // 时间刻度最小间隔（秒）
+        "time_interval_max": 5,        // 时间刻度最大间隔（秒）
+        "color_min": -30,              // 色系对应的强度最小值
+        "color_max": 60,               // 色系对应的强度最大值
+        "colormap": "jet",             // 色系类型，暂时只支持 'jet'
+        "draggable": false,            // 色系条是否可拖拽调整范围
+        "color_wheel_enabled": true,   // 色系条滚轮是否启用
+        "time_wheel_enabled": true,    // 时间轴滚轮是否启用
+        "use_image_data": true,        // 是否使用 ImageData 高性能绘制（true 推荐，false 回退 fillRect）
+        // 行高计算模式：
+        //   'fill'  - 动态模式（默认）：让 max_rows 帧始终铺满图表高度，Y轴刻度对应实际时间
+        //   'time'  - 固定时间模式：每秒对应 px_per_second 像素，行高由帧间隔决定
+        "row_height_mode": "fill",
+        "px_per_second": 50,           // row_height_mode='time' 时每秒对应的像素高度
+        // fill 模式下行高像素限制（防止初始帧少时行高/时间刻度间隔过大）
+        "row_height_min": 0.1,         // 行高最小值（px），默认 0.1
+        "row_height_max": 10,          // 行高最大值（px），默认 10
       }
     }
     const mergedOptions = deepMerge({}, defaultOptions);
@@ -852,21 +881,23 @@ class sptmChart {
     this.ctx.lineTo(this.options.grid.left, this.height - this.options.grid.bottom);
     this.ctx.stroke();
 
-    // 绘制y轴标签
-    this.ctx.fillStyle = this.options.yaxis.text_color||'#343434';
-    this.ctx.textAlign = 'right';
-    this.ctx.textBaseline = 'middle';
-    this.ctx.font = `${this.options.yaxis.text_font_size*this.devicePixelRatio}px ${this.options.yaxis.text_font_family}`;
-    this.options.yaxis.labels.forEach((label, index) => {
-      const y = this.height - this.options.grid.bottom - label.offsetY;
-      const centtext=this.options.yaxis.axis_function(label.text)
-      const texts=truncateNumber(centtext,this.options.yaxis.decimals);
-      this.ctx.fillText(texts, this.options.grid.left - 5, y);
-    });
-    
-    //绘制Y轴单位
-    if(this.options.yaxis.unit!==""){
-      this.ctx.fillText(this.options.yaxis.unit, this.options.grid.left - 5, this.options.grid.top/2);
+    // 绘制y轴标签（瀑布图模式由 Waterfall 模块绘制时间轴，这里跳过）
+    if (this.options.chart_type !== 'waterfall') {
+      this.ctx.fillStyle = this.options.yaxis.text_color||'#343434';
+      this.ctx.textAlign = 'right';
+      this.ctx.textBaseline = 'middle';
+      this.ctx.font = `${this.options.yaxis.text_font_size*this.devicePixelRatio}px ${this.options.yaxis.text_font_family}`;
+      this.options.yaxis.labels.forEach((label, index) => {
+        const y = this.height - this.options.grid.bottom - label.offsetY;
+        const centtext=this.options.yaxis.axis_function(label.text)
+        const texts=truncateNumber(centtext,this.options.yaxis.decimals);
+        this.ctx.fillText(texts, this.options.grid.left - 5, y);
+      });
+      
+      //绘制Y轴单位
+      if(this.options.yaxis.unit!==""){
+        this.ctx.fillText(this.options.yaxis.unit, this.options.grid.left - 5, this.options.grid.top/2);
+      }
     }
   }
   
@@ -905,6 +936,13 @@ class sptmChart {
    * 绘制网格
    */
   drawGrid(){
+    // 瀑布图模式：不在网格区域绘制背景和网格线（由 Waterfall 模块接管）
+    if (this.options.chart_type === 'waterfall') {
+      // 仍然绘制背景
+      this.ctx.fillStyle = this.options.grid.background;
+      this.ctx.fillRect(this.options.grid.left, this.options.grid.top, this.chartWidth, this.chartHeight);
+      return;
+    }
     this.ctx.fillStyle = this.options.grid.background;
     this.ctx.fillRect(this.options.grid.left, this.options.grid.top, this.chartWidth, this.chartHeight);
     this.ctx.strokeStyle = this.options.grid.color;
@@ -988,6 +1026,36 @@ class sptmChart {
     this.clearCanvas();
     this.drawAxis();
     this.drawGrid();
+    // 瀑布图模式：同时清空帧缓冲
+    if (this.options.chart_type === 'waterfall') {
+      this._waterfall.clearData();
+    }
+  }
+
+  /**
+   * 清空瀑布图帧缓冲数据（公开方法）
+   */
+  clearWaterfallData(){
+    this._waterfall.clearData();
+    this.drawChart();
+  }
+
+  /**
+   * 获取色系范围（公开方法）
+   * @returns {{ min: number, max: number }}
+   */
+  getWaterfallColorRange(){
+    return this._waterfall.getColorRange();
+  }
+
+  /**
+   * 设置色系范围（公开方法）
+   * @param {number} min 最小强度值
+   * @param {number} max 最大强度值
+   */
+  setWaterfallColorRange(min, max){
+    this._waterfall.setColorRange(min, max);
+    this.drawChart();
   }
   /**
    * 绘制图表
@@ -1231,11 +1299,40 @@ class sptmChart {
       this.refreshInterval=null;
     }
   }
+
+
+
+  /**
+   * 切换瀑布图行高模式
+   * @param {string} mode 'fill' | 'time'
+   */
+  setWaterfallRowHeightMode(mode){
+    if (this.options.chart_type !== 'waterfall') return;
+    this._waterfall.setRowHeightMode(mode);
+    this.drawChart();
+  }
+
+  /**
+   * 设置瀑布图行缩放比
+   * @param {number} scale 行缩放比（0.1 - 5.0）
+   */
+  setWaterfallRowScale(scale){
+    if (this.options.chart_type !== 'waterfall') return;
+    this._waterfall.setRowScale(scale);
+    this.drawChart();
+  }
   
   /**
    * 绘制谱线
    */
   drawTraces(){
+    // 瀑布图模式
+    if (this.options.chart_type === 'waterfall') {
+      const useImageData = this.options.waterfall?.use_image_data !== false;
+      this._waterfall.draw(useImageData);
+      return;
+    }
+    // 传统线图模式
     for (let i = 0; i < this.tracesData.length; i++) {
       if (this.tracesData[i].datainfo?.length>0&&this.tracesData[i].visible) {
         let linedata=this.tracesData[i].datainfo
@@ -1448,6 +1545,11 @@ class sptmChart {
     }
     const options = deepMerge(defaultOption, option);
     this.tracesData.push(options);
+    // 瀑布图模式：初始化帧缓冲区
+    if (this.options.chart_type === 'waterfall') {
+      this._waterfall.clearData();
+      this._waterfall.applyConfig(this.options.waterfall);
+    }
     this.isDraw=true;
     this.drawChart();
   }
@@ -1460,7 +1562,17 @@ class sptmChart {
   setTraceData(id,data){
     for (let i = 0; i < this.tracesData.length; i++) {
       if (this.tracesData[i].id === id) {
-        this.tracesData[i].datainfo=data;
+        if (this.options.chart_type === 'waterfall') {
+          // 瀑布图模式：将数据追加到帧缓冲区（而非覆盖）
+          // data 格式：{ point, step, start_freq, end_freq, width, data: [], time }
+          const maxRows = this.options.waterfall?.max_rows || 100;
+          this._waterfall.pushRow(data, maxRows);
+          this.isDraw = true;
+          this.drawChart();
+          return;
+        } else {
+          this.tracesData[i].datainfo=data;
+        }
         break;
       }
     }
@@ -1700,6 +1812,17 @@ class sptmChart {
       mouseupy:0,
       button:event.button
     }
+
+    // 瀑布图模式：在色系条区域按下鼠标，开始色系拖动
+    if (this.options.chart_type === 'waterfall') {
+      const rect = this.canvas.getBoundingClientRect();
+      const mouseX = event.clientX - rect.left;
+      const mouseY = event.clientY - rect.top;
+      if (this._waterfall.isInColorBar(mouseX)) {
+        this._waterfall.handleColorBarDrag(mouseY, true);
+        return;
+      }
+    }
     
     if (event.button === 0) {
       this.ctx.canvas.style.cursor = 'grabbing';
@@ -1713,6 +1836,10 @@ class sptmChart {
    * @param {*} event
    */
   mouseup(event) {
+    // 瀑布图模式：结束色系拖动
+    if (this.options.chart_type === 'waterfall') {
+      this._waterfall.endDrag();
+    }
     if(this._markerDragState.isDragging){
       const marker=this._markerList.get(this._markerDragState.dragMarkerId);
       if(marker){
@@ -1774,6 +1901,15 @@ class sptmChart {
     let y = event.offsetY;
     
     if (this.mousedownInfo.isMouseDown) {
+      // 瀑布图色系条拖动
+      if (this.options.chart_type === 'waterfall' && this._waterfall._colorBarDrag.active) {
+        const rect = this.canvas.getBoundingClientRect();
+        const mouseY = event.clientY - rect.top;
+        this._waterfall.handleColorBarDrag(mouseY, false);
+        this.drawChart();
+        return;
+      }
+
       if(this.moveInfo.preX==0){
         this.moveInfo.preX = this.mousedownInfo.startX;
         this.moveInfo.preY = this.mousedownInfo.startY;
@@ -1818,8 +1954,10 @@ class sptmChart {
       if(type=="grid"){
         let point=this.getMousePoint(event);
         this.options.level_tipline.point=point;
-        // 使用 draw() 而不是 drawChart()，避免重启定时器导致卡顿
-        this.draw();
+        // 使用 throttle 节流，避免频繁重绘导致卡顿
+        this.throttle(()=>{
+          this.draw();
+        });
       }
     }
     
@@ -2110,6 +2248,55 @@ class sptmChart {
    * @returns 
    */
   handleZoom(event,delta) {
+    // 瀑布图模式：色系条 / 时间轴 / 行缩放 + X轴缩放
+    if (this.options.chart_type === 'waterfall') {
+      let type=this.getMousePosition(event);
+      let handled = false;
+      if (type === 'right') {
+        // 色系条区域：调整色系范围
+        handled = this._waterfall.handleColorWheel(event, delta);
+      } else if (type === 'left') {
+        // Y 轴区域：调整时间刻度间隔
+        handled = this._waterfall.handleTimeWheel(event, delta);
+      } else if (type === 'grid') {
+        // 网格区域：只做 Y 轴行缩放
+        handled = this._waterfall.handleRowScaleWheel(event, delta);
+      } else if (type === 'bottom') {
+        // X轴标签区域：X轴缩放（复用线图逻辑）
+        let mouseVal=this.getMouseVal(event,0);
+        if(mouseVal.order!==null){
+          let order=mouseVal.order;
+          let labelInfo=this.xLabelGridInfo[order];
+          let initSpan=labelInfo.span;
+          let newZoom=labelInfo.draw_zoom+delta*4;
+          let zoomSpan = Math.floor(initSpan /newZoom/2)*2;
+          if(zoomSpan<=initSpan&&zoomSpan>=6){
+            let centerVal=mouseVal.x;
+            let minValue=Math.floor(centerVal-(centerVal-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*zoomSpan);
+            let maxValue=Math.floor(minValue+zoomSpan);
+            if(minValue<labelInfo.start_freq){
+              minValue=labelInfo.start_freq;
+              maxValue=Math.floor(minValue+zoomSpan);
+            }
+            if(maxValue>labelInfo.end_freq){
+              maxValue=labelInfo.end_freq;
+              minValue=Math.ceil(maxValue-zoomSpan);
+            }
+            if(minValue>=labelInfo.start_freq&&maxValue<=labelInfo.end_freq){
+              this.xLabelGridInfo[order].draw_zoom = newZoom;
+              let newCenter=minValue+Math.floor((maxValue-minValue)/2);
+              this.xLabelGridInfo[order].draw_zoom_freq =newCenter;
+              this.xLabelGridInfo[order].show_start_freq=minValue;
+              this.xLabelGridInfo[order].show_end_freq=maxValue;
+              handled = true;
+            }
+          }
+        }
+      }
+      if (handled) this.drawChart();
+      return;
+    }
+
     let type=this.getMousePosition(event);
     const zoomFactor = 1.1;
     
@@ -2344,6 +2531,8 @@ class sptmChart {
   setOptions(options){
     let newoptions = deepMerge(this.options,options);
     this.initOptions(newoptions);
+    // 同步瀑布图配置
+    this._waterfall.applyConfig(this.options.waterfall);
   }
   
 

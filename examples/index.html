@@ -3,192 +3,402 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>chart Example</title>
-  <!-- <link rel="stylesheet" href="../dist/my-openlayers-wrapper.css"> 引入提取的 CSS -->
-  <link rel="stylesheet" href="../dist/sptmChart.css"> <!-- 引入自定义的 CSS -->
+  <title>chart Example with Marker</title>
+  <link rel="stylesheet" href="../dist/sptmChart.css">
   <style>
     #mycanvas {
       margin: 0;
       width: 100%;
       height: 600px;
     }
+    .marker-panel {
+      margin: 10px 0;
+      padding: 15px;
+      background: #f5f5f5;
+      border-radius: 8px;
+    }
+    .marker-panel h3 {
+      margin: 0 0 10px 0;
+      color: #333;
+      font-size: 16px;
+    }
+    .btn-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.3s;
+    }
+    .btn:hover {
+      opacity: 0.8;
+      transform: translateY(-1px);
+    }
+    .btn-primary {
+      background: #239ee7;
+      color: white;
+    }
+    .btn-success {
+      background: #4caf50;
+      color: white;
+    }
+    .btn-danger {
+      background: #f44336;
+      color: white;
+    }
+    .btn-warning {
+      background: #ff9800;
+      color: white;
+    }
+    .btn-info {
+      background: #00bcd4;
+      color: white;
+    }
+    .marker-info {
+      display: flex;
+      gap: 15px;
+      flex-wrap: wrap;
+      font-size: 13px;
+      color: #666;
+    }
+    .marker-info span {
+      background: #fff;
+      padding: 4px 12px;
+      border-radius: 4px;
+      border-left: 3px solid #239ee7;
+    }
+    .marker-info span.focus {
+      border-left-color: #ff9800;
+      color: #ff9800;
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
   <div id="mycanvas" style="color: rebeccapurple;"></div>
-  <p><button onclick="changeProperty()">更改门限属性</button>
-    <button onclick="changeOptions()">更改属性</button><button onclick="stop()">停止</button></p>
+  
+  <!-- Marker控制面板 -->
+  <div class="marker-panel">
+    <h3>🎯 Marker 控制面板</h3>
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="addMarker()">添加Marker</button>
+      <button class="btn btn-success" onclick="addMultipleMarkers()">添加3个Marker</button>
+      <button class="btn btn-danger" onclick="deleteLastMarker()">删除最后Marker</button>
+      <button class="btn btn-warning" onclick="clearAllMarkers()">清除所有</button>
+      <button class="btn btn-info" onclick="toggleMarkers()">显示/隐藏</button>
+      <button class="btn btn-primary" onclick="moveToRandomFreq()">随机移动焦点Marker</button>
+      <button class="btn btn-success" onclick="moveToCenter()">移到中心频率</button>
+      <button class="btn btn-danger" onclick="exitFocus()">退出焦点</button>
+      <button class="btn btn-info" onclick="switchTrace()">切换谱线</button>
+    </div>
+    <div class="marker-info" id="markerInfo">
+      <span>Marker数量: <strong id="markerCount">0</strong></span>
+      <span class="focus">焦点Marker: <strong id="focusMarker">无</strong></span>
+      <span>焦点频率: <strong id="focusFreq">--</strong> MHz</span>
+      <span>跟随谱线：<strong id="traceId">-</strong></span>
+    </div>
+  </div>
+
+  <p>
+    <button onclick="changeProperty()">更改门限属性</button>
+    <button onclick="changeOptions()">更改属性</button>
+    <button onclick="getOptions()">获取属性</button>
+    <button onclick="stop()">停止</button>
+  </p>
 
   <div id="tip"></div>
   <canvas id="myCanvass" width="500" height="500"></canvas>
-  <!-- 引入你的编译库 -->
+  
   <script src="../dist/sptmChart.js"></script>
-   <!-- <script src="../dist/sptmChart.esm.js"></script> -->
-  <!-- <script src="../lib/sptmChart.js"></script> -->
   <script>
-    // 使用你的库
-    // document.addEventListener('DOMContentLoaded', function() {
-    //   // 确保库加载完毕后执行
-    //   console.log('DOM fully loaded and parsed',window.sptmChart);
-    //   setTimeout(() => {
-    //     let sptmChart = new sptmChart("mycanvas",{});
-    //     console.log(sptmChart.getOptions());
-    //   }, 2000);
-    // });
-    let sptmCharts=""
+    let sptmCharts = "";
+    const {sptmChart,MarkerItem} = window.sptmChart;
+    // 1线 数据存储
+    let dataInfo = {
+      data:[],// 实时数据
+      // 峰值数据
+      peakdata:[],
+      //平均值数据
+      avgdata:[],
+    };
     window.onload = function() {
-      let options={
-        "background":"#fff",
-        "type":"FFT",//FFT DScan
+      let options = {
+        "background": "#fff",
+        "type": "DScan",// FFT DScan
         "duration": 50,
-        "width":'100%',//画布宽度
-        "height": '100%',//画布高度
-        "center_freq":200000000,
-        "span":2000000,
-        "grid":{
-          "width":1,
-          "color":"#B7B7B7",
-          "xgrid_line_dash":[15,5]
+        "width": '100%',
+        "height": '100%',
+        "center_freq": 200000000,
+        "span": 2000000,
+        "grid": {
+          "width": 1,
+          "color": "#B7B7B7",
+          "xgrid_line_dash": [15, 5]
         },
-        "xaxis":{
-          "width":1,
-          "unit":"MHz",
-          "decimals":4,
-          "color":"#333",
-          "label_angle":30,//X轴标签倾斜角度
-          "dscan_freq":[//DScan模式下的频率范围 [起始频率，结束频率] 传入多个范围时，则分段显示
+        "xaxis": {
+          "width": 1,
+          "unit": "MHz",
+          "decimals": 4,
+          "color": "#333",
+          "label_angle": 30,
+          "dscan_freq": [
             {
-              "start_freq": 20000000,//X轴起始频率
-              "end_freq": 1000000000,//X轴结束频率
-              "width":1,//X轴线宽度 1多条时等比宽度
+              "start_freq": 20000000,
+              "end_freq": 1000000000,
+              "width": 1,
             },
             {
-              "start_freq": 1200000000,//X轴起始频率
-              "end_freq": 2000000000,//X轴结束频率
-              "width":1,//X轴线宽度 1多条时等比宽度
+              "start_freq": 1200000000,
+              "end_freq": 2000000000,
+              "width": 1,
             }
           ],
-          "dscan_space": 10,//DScan模式下的频段间隔像素
+          "dscan_space": 10,
         },
-        "yaxis":{
-          "width":1,
-          "unit":"dBμV",
-          "color":"black",
-          "min_value":-20,
-          "max_value":20,
-          "number":5,
-          "floor_value": -20,//Y轴最小值范围
-        "ceiling_value": 100,//Y轴最大值范围
-          "decimals":2,//小数位数
-          //"axis_function":function(value){return value-107}
+        "yaxis": {
+          "width": 1,
+          "unit": "dBμV",
+          "color": "black",
+          "min_value": -20,
+          "max_value": 20,
+          "number": 5,
+          "floor_value": -20,
+          "ceiling_value": 100,
+          "decimals": 2,
         },
-        "legend":{
-          "visible": true,//是否显示图例
-        },
-        "threshold":{ //门限样式
-          "visible": false,//是否显示门限
-          "is_darg":true,//是否可以拖拽门限
-          "level": 36,//门限强度值 dbuv
-          "icon_size": [28,48],//门限图标大小
-          "icon_url":"../images/threshold_slider.png",//门限图标地址
-          "drag_icon_url":"../images/threshold_slider_drag.png"//门限拖拽图标地址
-        },
-        "level_tipline":{//移动鼠标频谱值提示
+        "legend": {
           "visible": true,
-          "freq_visible":true,//是否显示频率
-          "color": "#00afff",//谱值提示线颜色
-          "width": 1,//谱值提示线宽度
+        },
+        "marker": {  // Marker配置
+          "followTraceY": true,      // 启用 Y 轴跟随
+          "traceYOffset": -10,       // 在谱线上方 10 像素
+          "visible": true,
+          "autoAdd": true,
+          "defaultCount": 1,
+          "maxCount": 10,
+          "shape": 0,
+          "verticalLine": true,
+          "crossLine": false,
+          "scutchonVisible": true,
+          "clickBlankToExit": true  // 点击空白区域退出焦点
+        },
+        "threshold": {
+          "visible": false,
+          "is_darg": true,
+          "level": 36,
+          "icon_size": [28, 48],
+          "icon_url": "../images/threshold_slider.png",
+          "drag_icon_url": "../images/threshold_slider_drag.png"
+        },
+        "contextMenu": {  // 右键菜单配置
+          "enabled": true,  // 启用右键菜单
+          "actions": ["exitFocus"]  // 右键动作：退出焦点
+        },
+        "level_tipline": {
+          "visible": true,
+          "freq_visible": true,
+          "color": "#00afff",
+          "width": 1,
+        },
+        "centerinfo": {
+          visible: true,
+          position: "top-right",
+          offsetX: -30,
+          offsetY: 10,
+          background: "rgba(0,0,0,0.3)",
+          text_color: "#00FF00",
+          font_size: 14
         }
-      }
-      sptmCharts = new sptmChart("mycanvas",options);
+      };
       
-      let datas={
-        "id":1,
-        "type":"FFT",
-        "visibility":true,
-        "point":1600,
-        "name":"Trace1",
-        "color":"green",
-        "width":1,
-        "datainfo":[
+      sptmCharts = new sptmChart("mycanvas", options);
+      
+      // 添加测试谱线
+      let dataArr1=generateNumbersWithDominantMiddle(1032, -20, 58)
+      console.log(dataInfo)
+      for(let item in dataInfo){
+        console.log(item)
+        dataInfo[item]=dataArr1
+      }
+
+      
+
+      let datas1 = {
+        "id": 1,
+        "type": "FFT",
+        "visibility": true,
+        "point": 1600,
+        "name": "Trace1",
+        "color": "blue",
+        "width": 1,
+        "datainfo": [
           {
-            "point":1032,
-            "center_freq":200000000,
-            "span":312,
-            "data":generateNumbersWithDominantMiddle(1032, -20, 58),
+            "point": 1032,
+            "center_freq": 200000000,
+            "span": 312,
+            "data": dataArr1,
+          }
+        ]
+      };
+      // sptmCharts.addTrace(datas1);
+      let datas2 = {
+        "id": 2,
+        "type": "FFT",
+        "visibility": true,
+        "point": 1600,
+        "name": "峰值",
+        "color": "#ff0000",
+        "width": 1,
+        "datainfo": [
+          {
+            "point": 1032,
+            "center_freq": 200000000,
+            "span": 312,
+            "data": dataArr1,
+          }
+        ]
+      };
+      // sptmCharts.addTrace(datas2);
+      let datas3 = {
+        "id": 3,
+        "type": "FFT",
+        "visibility": true,
+        "point": 1600,
+        "name": "平均",
+        "color": "#00ff00",
+        "width": 1,
+        "datainfo": [
+          {
+            "point": 1032,
+            "center_freq": 200000000,
+            "span": 312,
+            "data": dataArr1,
           }
         ]
       }
-      //sptmCharts.addTrace(datas)
-      let datas3={
-        "id":3,
-        "type":"FFT",
-        "visibility":true,
-        "point":1600,
-        "name":"Trace3",
-        "color":"blue",
-        "width":1,
-        "datainfo":[
-          {
-            "point":1032,
-            "center_freq":200000000,
-            "span":312,
-            "data":generateNumbersWithDominantMiddle(1032, -20, 58),
-          }
-        ]
-      }
-     sptmCharts.addTrace(datas3)
-      let datass={
-        "id":2,
-        "type":"DScan",
-        "visibility":true,
-        "point":100,
-        "name":"Trace2",
-        "color":"#ff0000",
-        "width":1,
-        "datainfo":[
+      // sptmCharts.addTrace(datas3);
+
+
+
+      let datas4 = {
+        "id": 4,
+        "type": "FFT",
+        "visibility": true,
+        "point": 1600,
+        "name": "Trace4",
+        "color": "#ff0000",
+        "width": 1,
+        "datainfo": [
           {
             "point":1600,
             "step":200000000,
             "start_freq":200000000,
-            "end_freq":2000000000,
+            "end_freq":1000000000,
             "width":1,
             "data":generateNumbersWithDominantMiddle(1600, -20, 100),
           },
           {
-            "point":1600,
+            "point":2000,
             "step":200000000,
-            "start_freq":6000000000,
-            "end_freq":9000000000,
+            "start_freq":1200000000,
+            "end_freq":2000000000,
             "width":1,
-            "data":generateNumbersWithDominantMiddle(1600, -20, 100),
+            "data":generateNumbersWithDominantMiddle(2000, -20, 60),
           }
         ]
-        
+      };
+      sptmCharts.addTrace(datas4);
+
+      // 启动Marker信息更新
+      startMarkerUpdate();
+      
+      console.log(sptmCharts.getOptions());
+      console.log(sptmCharts);
+      timeLine()
+
+    };
+    // 更新数据
+    function updateData(id){
+      let datasArr = generateNumbersWithDominantMiddle(1032, 10, 80);
+      let datas=[
+          {
+            "point":1032,
+            "center_freq":200000000,
+            "span":100,
+            "data":datasArr,
+          }
+        ]
+        // 赋值
+        dataInfo.data=datasArr;
+        dataInfo.peakdata=mergeArray(datasArr,dataInfo.peakdata);
+        dataInfo.avgdata=mergeArrayAvg(datasArr,dataInfo.avgdata,6);
+        sptmCharts.setTraceData(id,datas)
+
+        sptmCharts.setTraceData(2,[
+          {
+            "point":1032,
+            "center_freq":200000000,
+            "span":100,
+            "data":dataInfo.peakdata,
+          }
+        ])//峰值
+        sptmCharts.setTraceData(3,[
+          {
+            "point":1032,
+            "center_freq":200000000,
+            "span":100,
+            "data":dataInfo.avgdata,
+          }
+        ])//平均值
+    }
+    // 传入两个数组，返回一个数组，数组长度为第一个数组长度，数组元素为第一个数组元素和第二个数组元素最大值
+    function mergeArray(arr1, arr2) {
+      let result = [];
+      for (let i = 0; i < arr1.length; i++) {
+        result.push(Math.max(arr1[i], arr2[i]));
       }
-      //sptmCharts.addTrace(datass)
-
-
+      return result;
+    }
+    // 传入两个数组dan的数组，返回一个数组，数组长度为第一个数组长度，数组元素为第一个数组元素和第二个数组元素平均值，保留小数点后n位
+    function mergeArrayAvg(arr1, arr2, n) {
+      let result = [];
+      for (let i = 0; i < arr1.length; i++) {
+        result.push(Math.round((arr1[i] + arr2[i]) / 2 * Math.pow(10, n)) / Math.pow(10, n));
+      }
+      return result;
+    }
+    // 参数转为数字保留小数点后n位
+    function toNumber(num, n) {
+      return Math.round(num * Math.pow(10, n)) / Math.pow(10, n);
+    }
+    function timeLine(){
       setInterval(function() {
-        let datas=[
-          {
-            "point":1032,
-            "center_freq":200000000,
-            "span":100,
-            "data":generateNumbersWithDominantMiddle(1032, -20, 58),
-          }
-        ]
+        // updateData(1)
+        // let datas=[
+        //   {
+        //     "point":1032,
+        //     "center_freq":200000000,
+        //     "span":100,
+        //     "data":generateNumbersWithDominantMiddle(1032, -20, 58),
+        //   }
+        // ]
         
-        //sptmCharts.setTraceData(1,datas)
-        let datass=[
-          {
-            "point":1032,
-            "center_freq":200000000,
-            "span":100,
-            "data":generateNumbersWithDominantMiddle(1032, -6, 5),
-          }
-        ]
-        //sptmCharts.setTraceData(3,datass)
+        // sptmCharts.setTraceData(1,datas)
+        // let datass=[
+        //   {
+        //     "point":1032,
+        //     "center_freq":200000000,
+        //     "span":100,
+        //     "data":generateNumbersWithDominantMiddle(1032, -6, 5),
+        //   }
+        // ]
+        // sptmCharts.setTraceData(2,datass)
 
         let datainfo=[
           {
@@ -208,87 +418,222 @@
             "data":generateNumbersWithDominantMiddle(2000, -20, 60),
           }
         ]
-        //sptmCharts.setTraceData(2,datainfo)
-      },50)
-      
-      console.log(sptmCharts.getOptions());
-
-
-
-
-
-
-
-
-      
-
-
-
-
-
-    };
-    function stop(){
-      sptmCharts.stopChart()
+         sptmCharts.setTraceData(4,datainfo)
+      },100)
     }
+    // ========== Marker功能函数 ==========
+    
+    // 添加Marker
+    function addMarker() {
+      // 或者动态设置单个 Marker
+// const markerId = chart.addMarker(true, true);
+// const marker = chart._markerList.get(markerId);
+// marker.setFollowTraceY(true);
+// marker.setTraceYOffset(-15);  // 自定义偏移量
 
-function generateNumbersWithDominantMiddle(count, min, max) {
-    const numbers = [];
-    // 生成 count-20 个随机数字，留出空间给中间的10个数字
-    for (let i = 0; i < count - 21; i++) {
-        const randomNumber = Math.floor(Math.random() * (max-20 - min + 1)) + min;
-        numbers.push(randomNumber);
-    }
-
-    // 生成中间的10个数字，使它们都比之前的数字大
-    const middleNumbers = [];
-    const dominantValue = Math.max(...numbers) + 5; // 确保中间数字更大
-    for (let i = 0; i < 20; i++) {
-        middleNumbers.push(dominantValue + Math.floor(Math.random() * 10)); // 小幅度增加
-    }
-
-    // 将中间数字插入到数组中
-    const insertIndex = Math.floor(count / 2) - 10; // 中间位置
-    numbers.splice(insertIndex, 0, ...middleNumbers); // 插入中间的10个数字
-    // 计算中位数的位置
-    const medianIndex = Math.floor(count / 2);
-    const maxNumber = Math.max(...numbers)+5
-    numbers.splice(medianIndex, 0, maxNumber);
-    return numbers;
-}
-function changeProperty(){
-          sptmCharts.setThresholdAttribute({
-            "visible": true,//是否显示门限
-            "is_darg":true,//是否可以拖拽门限
-          })
+      const id = sptmCharts.addMarker(true, true);
+      if (id > 0) {
+        console.log('添加Marker成功，ID:', id);
+        updateMarkerInfo();
+      } else {
+        alert('已达到最大Marker数量限制');
       }
+    }
+    
+    // 添加多个Marker
+    function addMultipleMarkers() {
+      for (let i = 0; i < 3; i++) {
+        setTimeout(() => {
+          const id = sptmCharts.addMarker(true, i === 2);
+          if (id > 0) {
+            // 随机位置
+            const centerFreq = sptmCharts.options.center_freq;
+            const span = sptmCharts.options.span;
+            const randomFreq = centerFreq - span/2 + Math.random() * span;
+            sptmCharts.moveMarkerByFreq(id, randomFreq);
+            console.log(`添加Marker ${id}，频率: ${(randomFreq/1000000).toFixed(2)} MHz`);
+          }
+        }, i * 200);
+      }
+      setTimeout(updateMarkerInfo, 1000);
+    }
+    
+    // 删除最后Marker
+    function deleteLastMarker() {
+      const result = sptmCharts.deleteMarker(0);
+      if (result) {
+        console.log('删除最后一个Marker');
+        updateMarkerInfo();
+      }
+    }
+    
+    // 清除所有Marker
+    function clearAllMarkers() {
+      sptmCharts.clearAllMarkers();
+      console.log('清除所有Marker');
+      updateMarkerInfo();
+    }
+    
+    // 显示/隐藏Marker
+    function toggleMarkers() {
+      const markers = sptmCharts.getMarkerList();
+      const anyVisible = markers.some(m => m.isVisible());
+      markers.forEach(marker => {
+        sptmCharts.setMarkerShow(marker.getMarkerID(), !anyVisible);
+      });
+      console.log(anyVisible ? '隐藏所有Marker' : '显示所有Marker');
+    }
+    
+    // 随机移动焦点Marker
+    function moveToRandomFreq() {
+      const focusId = sptmCharts.getMarkerFocusId();
+      if (focusId === 0) {
+        alert('请先添加或选中一个Marker');
+        return;
+      }
+      const centerFreq = sptmCharts.options.center_freq;
+      const span = sptmCharts.options.span;
+      const randomFreq = centerFreq - span/2 + Math.random() * span;
+      const result = sptmCharts.moveMarkerByFreq(focusId, randomFreq);
+      if (result) {
+        console.log(`移动Marker ${focusId} 到 ${(randomFreq/1000000).toFixed(2)} MHz`);
+      }
+    }
+    
+    // 移到中心频率
+    function moveToCenter() {
+      const focusId = sptmCharts.getMarkerFocusId();
+      if (focusId === 0) {
+        alert('没有焦点Marker');
+        return;
+      }
+      const centerFreq = sptmCharts.options.center_freq;
+      const result = sptmCharts.moveMarkerByFreq(focusId, centerFreq);
+      if (result) {
+        console.log(`移动Marker ${focusId} 到中心频率`);
+      }
+    }
+    
+    // 退出焦点
+    function exitFocus() {
+      const result = sptmCharts.exitMarkerFocus();
+      if (result) {
+        console.log('已退出 Marker 焦点');
+        updateMarkerInfo();
+      } else {
+        console.log('当前没有焦点 Marker');
+      }
+    }
+    // 切换 Marker 跟随的谱线
+    function switchTrace() {
+      const focusId = sptmCharts.getMarkerFocusId();
+      if (focusId === 0) {
+        alert('请先添加或选中一个 Marker');
+        return;
+      }
+      
+      // 获取当前谱线 ID
+      const currentTraceId = sptmCharts.getMarkerTraceId(focusId);
+      
+      // 获取所有可用谱线 ID
+      const availableIds = sptmCharts.getAvailableTraceIds();
+      
+      if (availableIds.length <= 1) {
+        alert('只有一条谱线，无法切换');
+        return;
+      }
+      
+      // 找到下一条谱线
+      let currentIndex = availableIds.indexOf(currentTraceId);
+      if (currentIndex === -1) currentIndex = 0;
+      
+      let nextIndex = (currentIndex + 1) % availableIds.length;
+      const nextTraceId = availableIds[nextIndex];
+      
+      // 设置新的谱线 ID
+      const result = sptmCharts.setMarkerTraceId(focusId, nextTraceId);
+      if (result) {
+        console.log(`Marker #${focusId} 切换到谱线 ${nextTraceId}`);
+        updateMarkerInfo();
+      }
+    }
 
+    // 更新Marker信息显示
+    function startMarkerUpdate() {
+      setInterval(updateMarkerInfo, 200);
+    }
+    
+    function updateMarkerInfo() {
+      const markers = sptmCharts.getMarkerList(true);
+      const focusId = sptmCharts.getMarkerFocusId();
+      const focusFreq = focusId > 0 ? sptmCharts.getMarkerFreq(focusId) : 0;
+      const traceId = focusId > 0 ? sptmCharts.getMarkerTraceId(focusId) : -1;
 
-function changeOptions(){
-  let options = {
-    "xaxis":{
-          "dscan_freq":[//DScan模式下的频率范围 [起始频率，结束频率] 传入多个范围时，则分段显示
+      document.getElementById('markerCount').textContent = markers.length;
+      document.getElementById('focusMarker').textContent = focusId > 0 ? `#${focusId}` : '无';
+      document.getElementById('focusFreq').textContent = focusFreq > 0 ? (focusFreq/1000000).toFixed(4) : '--';
+      document.getElementById('traceId').textContent = traceId >= 0 ? traceId : '-';
+    }
+
+    // ========== 原有函数 ==========
+    
+    function stop() {
+      sptmCharts.stopChart();
+    }
+
+    function generateNumbersWithDominantMiddle(count, min, max) {
+      const numbers = [];
+      for (let i = 0; i < count - 21; i++) {
+        const randomNumber = Math.floor(Math.random() * (max - 20 - min + 1)) + min;
+        numbers.push(randomNumber);
+      }
+      const middleNumbers = [];
+      const dominantValue = Math.max(...numbers) + 5;
+      for (let i = 0; i < 20; i++) {
+        middleNumbers.push(dominantValue + Math.floor(Math.random() * 10));
+      }
+      const insertIndex = Math.floor(count / 2) - 10;
+      numbers.splice(insertIndex, 0, ...middleNumbers);
+      const medianIndex = Math.floor(count / 2);
+      const maxNumber = Math.max(...numbers) + 5;
+      numbers.splice(medianIndex, 0, maxNumber);
+      return numbers;
+    }
+    
+    function changeProperty() {
+      sptmCharts.setThresholdAttribute({
+        "visible": true,
+        "is_darg": true,
+      });
+    }
+
+    function changeOptions() {
+      let options = {
+        "xaxis": {
+          "dscan_freq": [
             {
-              "start_freq": 200000000,//X轴起始频率
-              "end_freq": 5000000000,//X轴结束频率
-              "width":1,//X轴线宽度 1多条时等比宽度
+              "start_freq": 200000000,
+              "end_freq": 5000000000,
+              "width": 1,
             },
             {
-              "start_freq": 6000000000,//X轴起始频率
-              "end_freq": 9000000000,//X轴结束频率
-              "width":1,//X轴线宽度 1多条时等比宽度
+              "start_freq": 6000000000,
+              "end_freq": 9000000000,
+              "width": 1,
             }
           ]
         },
-    "level_tipline":{//移动鼠标频谱值提示
-      "visible": true,//是否显示频谱值
-      "color": "#00afff",//谱值提示线颜色
-      "width": 1,//谱值提示线宽度
+        "level_tipline": {
+          "visible": true,
+          "color": "#00afff",
+          "width": 1,
+        }
+      };
+      sptmCharts.setOptions(options);
     }
-  }
-  sptmCharts.setOptions(options)
-}
-
+    function getOptions(){
+      console.log(sptmCharts.getOptions());
+    }
   </script>
-  
 </body>
 </html>
