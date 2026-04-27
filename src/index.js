@@ -55,6 +55,11 @@ class sptmChart {
     this.throttleDelay=options.throttleDelay||100;//节流延迟
     this.lastCallTime=0//用于节流时间
     this.wheelListener=this.handleWheel.bind(this)
+
+    // 绘制调度优化：使用 requestAnimationFrame 避免一帧内多次重绘
+    this._drawRafId = null;      // 当前挂起的 raf id
+    this._drawPending = false;   // 是否有待执行的绘制
+    this._resizeTimer = null;    // resize debounce 定时器
     this.init();
     this.canvas.addEventListener('mousedown', this.mousedown.bind(this));
     this.canvas.addEventListener('mouseup',this.mouseup.bind(this))
@@ -66,8 +71,11 @@ class sptmChart {
     this.canvas.addEventListener('contextmenu', this.handleContextMenu.bind(this));
     window.addEventListener('keydown', this.handleKeydown.bind(this));
     window.addEventListener('keyup', this.handleKeyup.bind(this));
-    // 监听窗口调整大小
-    window.addEventListener('resize', () => this.resizeCanvas());
+    // 监听窗口调整大小（添加 debounce，避免拖拽窗口时频繁重绘）
+    window.addEventListener('resize', () => {
+      clearTimeout(this._resizeTimer);
+      this._resizeTimer = setTimeout(() => this.resizeCanvas(), 200);
+    });
     //鼠标按下事件
     this.mousedownInfo={
       isMouseDown:false,
@@ -85,6 +93,17 @@ class sptmChart {
       moveX:0,
       moveY:0
     }
+    //选框功能状态
+    this._selectionBox={
+      active:false,
+      pending:false,
+      startX:0,
+      startY:0,
+      currentX:0,
+      currentY:0,
+      timer:null
+    }
+    this._suppressClick=false;
     //初始门限滑块
     this.initthreshold();
     //初始化提示框
@@ -134,7 +153,94 @@ class sptmChart {
     }
     return null;
   }
-  
+
+  /**
+   * 绘制选框
+   * @private
+   */
+  _drawSelectionBox() {
+    if (!this._selectionBox.active) return;
+    const sb = this.options.selectionBox;
+    const ctx = this.ctx;
+    const grid = this.options.grid;
+    const startX = this._selectionBox.startX;
+    const startY = this._selectionBox.startY;
+    const currentX = this._selectionBox.currentX;
+    const currentY = this._selectionBox.currentY;
+
+    // 限制在网格绘制区域内
+    const minX = Math.max(grid.left, Math.min(startX, currentX));
+    const maxX = Math.min(this.width - grid.right, Math.max(startX, currentX));
+    const minY = Math.max(grid.top, Math.min(startY, currentY));
+    const maxY = Math.min(this.height - grid.bottom, Math.max(startY, currentY));
+
+    const width = maxX - minX;
+    const height = maxY - minY;
+    if (width <= 0 || height <= 0) return;
+
+    ctx.save();
+    ctx.fillStyle = sb?.fillStyle || 'rgba(0, 212, 255, 0.15)';
+    ctx.strokeStyle = sb?.strokeStyle || '#00d4ff';
+    ctx.lineWidth = sb?.lineWidth || 1;
+    ctx.fillRect(minX, minY, width, height);
+    ctx.strokeRect(minX, minY, width, height);
+    ctx.restore();
+  }
+
+  /**
+   * 结束选框并触发回调
+   * @private
+   */
+  _endSelectionBox() {
+    const sb = this.options.selectionBox;
+    const startX = this._selectionBox.startX;
+    const startY = this._selectionBox.startY;
+    const currentX = this._selectionBox.currentX;
+    const currentY = this._selectionBox.currentY;
+
+    // 清理状态
+    clearTimeout(this._selectionBox.timer);
+    this._selectionBox.timer = null;
+    this._selectionBox.active = false;
+    this._selectionBox.pending = false;
+
+    // 限制在网格绘制区域内计算频率
+    const grid = this.options.grid;
+    const minX = Math.max(grid.left, Math.min(startX, currentX));
+    const maxX = Math.min(this.width - grid.right, Math.max(startX, currentX));
+    const minW = sb?.minWidth || 5;
+    if (maxX - minX < minW) {
+      this.draw();
+      return;
+    }
+
+    const rawStartFreq = this._xToFreq(minX);
+    const rawEndFreq = this._xToFreq(maxX);
+    if (rawStartFreq === null || rawEndFreq === null) {
+      this.draw();
+      return;
+    }
+
+    const startFreq = Math.round(rawStartFreq);
+    const endFreq = Math.round(rawEndFreq);
+    const centerFreq = Math.round((startFreq + endFreq) / 2);
+    const bandwidth = Math.abs(endFreq - startFreq);
+
+    this.draw();
+
+    if (typeof sb?.onSelect === 'function') {
+      sb.onSelect({
+        startFreq,
+        endFreq,
+        centerFreq,
+        bandwidth,
+        span: bandwidth,
+        startX: minX,
+        endX: maxX
+      });
+    }
+  }
+
   /**
    * 更新Marker场景矩形
    * @private
@@ -729,6 +835,19 @@ class sptmChart {
         // fill 模式下行高像素限制（防止初始帧少时行高/时间刻度间隔过大）
         "row_height_min": 0.1,         // 行高最小值（px），默认 0.1
         "row_height_max": 10,          // 行高最大值（px），默认 10
+        "process_first_only": true,    // pushRow 是否只处理第一条数据（向后兼容）
+        "time_axis_visible": true,     // 是否显示 Y 轴时间标线和标签
+        "time_format": "mm:ss",        // 时间格式：'mm:ss' | 'HH:mm:ss' | 'ss'
+        "time_label_interval": 1,      // Y 轴时间标签显示间隔（秒），默认1秒
+      },
+      "selectionBox": {                // 选框功能配置 - 新增
+        "enabled": false,              // 是否启用选框功能
+        "fillStyle": "rgba(0, 212, 255, 0.15)", // 选框填充色
+        "strokeStyle": "#00d4ff",      // 选框边框色
+        "lineWidth": 1,                // 选框边框宽度
+        "minWidth": 5,                 // 触发选框的最小宽度（像素）
+        "longPressDelay": 200,         // 长按触发选框的延迟（毫秒）
+        "onSelect": null               // 选框结束回调 function({startFreq, endFreq, centerFreq, bandwidth, startX, endX})
       }
     }
     const mergedOptions = deepMerge({}, defaultOptions);
@@ -1014,6 +1133,8 @@ class sptmChart {
     this._drawMarkers();
     // 绘制中心频率信息框
     this.drawCenterInfoBox();
+    // 绘制选框
+    this._drawSelectionBox();
   }
   
   /*
@@ -1383,7 +1504,7 @@ class sptmChart {
     
     this.drawLine(data);
   }
-  
+
   /**
    * 绘制线
    * @param {*} datas 谱线数据
@@ -1468,7 +1589,8 @@ class sptmChart {
     this.ctx.restore();
   }
   
-  /**
+
+ /**
    * 保留最大最小方式抽点
    * @param {*} data 源数据
    * @param {*} dataLen 源数据长度
@@ -1510,6 +1632,71 @@ class sptmChart {
       }
     }
     return {targetData,dataIndex};
+  }
+  /**
+   * 保留最大最小方式抽点
+   * @param {*} data 源数据
+   * @param {*} dataLen 源数据长度
+   * @param {*} targetLen 目标长度
+   */
+  extractTwoPolesTraceLine2(data,dataLen,targetLen){
+    // 预分配结果数组和配对数组，避免动态扩容和热循环中频繁创建小数组对象
+    const targetData = new Array(targetLen);
+    const dataIndex = new Array(targetLen);
+    for (let i = 0; i < targetLen; i++) {
+      targetData[i] = [0, 0];
+      dataIndex[i] = [0, 0];
+    }
+
+    // 预计算所有分割点索引（内联 selectDataIndex 逻辑，避免热循环中的函数调用开销）
+    // 调用方保证 dataLen > targetLen，使用公式：floor((i+1)*dataLen/targetLen)-1
+    const selectIndices = new Uint32Array(targetLen);
+    for (let i = 0; i < targetLen; i++) {
+      selectIndices[i] = Math.floor((i + 1) * dataLen / targetLen) - 1;
+    }
+
+    let targetCout = 0;
+    let isMaxSelected = false;
+    let maxValue = 0, minValue = 0;
+    let maxIndex = -1, minIndex = -1;
+    let selectIndex = selectIndices[0];
+    const d = data; // 局部引用，帮助 JIT 优化
+
+    for (let j = 0; j < dataLen; j++) {
+      const val = d[j];
+      if (isMaxSelected) {
+        if (val > maxValue) {
+          maxValue = val;
+          maxIndex = j;
+        } else if (val < minValue) {
+          minValue = val;
+          minIndex = j;
+        }
+      } else {
+        maxValue = val;
+        minValue = val;
+        maxIndex = j;
+        minIndex = j;
+        isMaxSelected = true;
+      }
+
+      if (j === selectIndex) {
+        const pair = targetData[targetCout];
+        pair[0] = maxValue;
+        pair[1] = minValue;
+
+        const idxPair = dataIndex[targetCout];
+        idxPair[0] = maxIndex;
+        idxPair[1] = minIndex;
+
+        targetCout++;
+        isMaxSelected = false;
+        if (targetCout < targetLen) {
+          selectIndex = selectIndices[targetCout];
+        }
+      }
+    }
+    return { targetData, dataIndex };
   }
   
   /**
@@ -1829,6 +2016,29 @@ class sptmChart {
     } else if (event.button === 2) {
       this.ctx.canvas.style.cursor = 'grab';
     }
+
+    // 选框功能：在网格区域按下时启动 pending 状态
+    const sb = this.options.selectionBox;
+    if (sb && sb.enabled && event.button === 0) {
+      const posType = this.getMousePosition(event);
+      if (posType === 'grid') {
+        this._selectionBox.pending = true;
+        this._selectionBox.startX = event.offsetX;
+        this._selectionBox.startY = event.offsetY;
+        this._selectionBox.currentX = event.offsetX;
+        this._selectionBox.currentY = event.offsetY;
+        this._selectionBox.active = false;
+        // 长按延迟后自动激活选框
+        const delay = sb.longPressDelay || 200;
+        this._selectionBox.timer = setTimeout(() => {
+          if (this._selectionBox.pending) {
+            this._selectionBox.active = true;
+            this._selectionBox.pending = false;
+            this.draw();
+          }
+        }, delay);
+      }
+    }
   }
   
   /**
@@ -1836,6 +2046,8 @@ class sptmChart {
    * @param {*} event
    */
   mouseup(event) {
+    // 取消可能挂起的 raf 绘制，避免交互结束后再执行一次多余绘制
+    this._cancelScheduledDraw();
     // 瀑布图模式：结束色系拖动
     if (this.options.chart_type === 'waterfall') {
       this._waterfall.endDrag();
@@ -1865,6 +2077,18 @@ class sptmChart {
       ...mousedowinfo
     }
     this.ctx.canvas.style.cursor = 'default';
+
+    // 选框功能：处理选框结束
+    if (this._selectionBox.active) {
+      this._endSelectionBox();
+      this._suppressClick = true;
+      return;
+    }
+    if (this._selectionBox.pending) {
+      clearTimeout(this._selectionBox.timer);
+      this._selectionBox.timer = null;
+      this._selectionBox.pending = false;
+    }
   }
   
     /**
@@ -1893,20 +2117,47 @@ class sptmChart {
       
       this._markerDragState.lastX=clampedX;
       this._markerDragState.lastY=clampedY;
-      this.draw();
+      this._scheduleDraw();
       return;
     }
     
     let x = event.offsetX;
     let y = event.offsetY;
-    
+
+    // 选框功能：如果选框已激活或待触发，优先处理选框
+    if (this._selectionBox.active) {
+      this._selectionBox.currentX = event.offsetX;
+      this._selectionBox.currentY = event.offsetY;
+      this._scheduleDraw();
+      return;
+    }
+    if (this._selectionBox.pending) {
+      const dx = event.offsetX - this._selectionBox.startX;
+      const dy = event.offsetY - this._selectionBox.startY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const minW = this.options.selectionBox?.minWidth || 5;
+      if (dist > minW) {
+        // 移动距离超过阈值，提前激活选框
+        clearTimeout(this._selectionBox.timer);
+        this._selectionBox.timer = null;
+        this._selectionBox.active = true;
+        this._selectionBox.pending = false;
+        this._selectionBox.currentX = event.offsetX;
+        this._selectionBox.currentY = event.offsetY;
+        this._scheduleDraw();
+        return;
+      }
+      // pending 状态下不执行平移等其他操作
+      return;
+    }
+
     if (this.mousedownInfo.isMouseDown) {
       // 瀑布图色系条拖动
       if (this.options.chart_type === 'waterfall' && this._waterfall._colorBarDrag.active) {
         const rect = this.canvas.getBoundingClientRect();
         const mouseY = event.clientY - rect.top;
         this._waterfall.handleColorBarDrag(mouseY, false);
-        this.drawChart();
+        this._scheduleDrawChart();
         return;
       }
 
@@ -1933,7 +2184,7 @@ class sptmChart {
             this.xLabelGridInfo[order].draw_zoom_freq=newCenter;
             // 频率范围改变时，更新 Marker 位置
             this._updateMarkersPositionByFreq();
-            this.drawChart();
+            this._scheduleDrawChart();
           }
         }
       } else {
@@ -1946,7 +2197,7 @@ class sptmChart {
           this.options.yaxis.max_value=maxval;
           // Y 轴范围改变时，如果 Marker 跟随谱线，也需要更新位置
           this._updateMarkersPositionByFreq();
-          this.drawChart();
+          this._scheduleDrawChart();
         }
       }
     }else{
@@ -1961,13 +2212,12 @@ class sptmChart {
       }
     }
     
-    this.moveInfo={
-      isMove:true,
-      preX:event.offsetX,
-      preY:event.offsetY,
-      moveX:event.offsetX,
-      moveY:event.offsetY
-    }
+    // 直接修改属性，避免每帧 mousemove 都创建新对象
+    this.moveInfo.isMove = true;
+    this.moveInfo.preX = event.offsetX;
+    this.moveInfo.preY = event.offsetY;
+    this.moveInfo.moveX = event.offsetX;
+    this.moveInfo.moveY = event.offsetY;
   }
 
   
@@ -1978,14 +2228,13 @@ class sptmChart {
    */
   mouseout(event){
     event.preventDefault();
+    this._cancelScheduledDraw();
     this.mousedownInfo.isMouseDown=false;
-    this.moveInfo={
-      isMove:false,
-      preX:0,
-      preY:0,
-      moveX:0,
-      moveY:0
-    }
+    this.moveInfo.isMove=false;
+    this.moveInfo.preX=0;
+    this.moveInfo.preY=0;
+    this.moveInfo.moveX=0;
+    this.moveInfo.moveY=0;
   }
   
   /**
@@ -2009,10 +2258,52 @@ class sptmChart {
       callback();
     }
   }
-  
+
+  /**
+   * 使用 requestAnimationFrame 调度一次 draw()，避免一帧内多次重绘
+   * 适合高频交互场景（Marker 拖动、选框、平移等）
+   * @private
+   */
+  _scheduleDraw() {
+    if (this._drawPending) return;
+    this._drawPending = true;
+    this._drawRafId = requestAnimationFrame(() => {
+      this._drawPending = false;
+      this._drawRafId = null;
+      this.draw();
+    });
+  }
+
+  /**
+   * 使用 requestAnimationFrame 调度一次 draw()，避免一帧内多次重绘
+   * 注意：交互绘制直接调用 draw()，不经过 drawChart()，避免干扰自动刷新定时器
+   * @private
+   */
+  _scheduleDrawChart() {
+    if (this._drawPending) return;
+    this._drawPending = true;
+    this._drawRafId = requestAnimationFrame(() => {
+      this._drawPending = false;
+      this._drawRafId = null;
+      this.draw();
+    });
+  }
+
+  /**
+   * 取消待执行的 raf 绘制（用于鼠标抬起等场景）
+   * @private
+   */
+  _cancelScheduledDraw() {
+    if (this._drawRafId !== null) {
+      cancelAnimationFrame(this._drawRafId);
+      this._drawRafId = null;
+      this._drawPending = false;
+    }
+  }
+
   /**
    * 双击事件
-   * @param {*} event 
+   * @param {*} event
    */
   handleDblClick(event) {
     console.log("handleDblClick", event);
@@ -2025,12 +2316,18 @@ class sptmChart {
    * @param {*} event 
    */
   handleClick(event) {
+    // 如果刚刚完成了选框操作，抑制本次 click 避免误触发
+    if (this._suppressClick) {
+      this._suppressClick = false;
+      return;
+    }
+
     const rect=this.canvas.getBoundingClientRect();
     const point={
       x:event.clientX-rect.left,
       y:event.clientY-rect.top
     };
-    
+
     //先尝试点击Marker
     if(this._handleMarkerClick(point)){
       return;
@@ -2109,7 +2406,7 @@ class sptmChart {
     if(this.thresholdFouce){
       const leves=this.getMouseVal(event,2).y;
       this.options.threshold.level=leves;
-      this.drawChart();
+      this._scheduleDrawChart();
     }
   }
   
@@ -2179,6 +2476,36 @@ class sptmChart {
     this.draw();
   }
   
+  /**
+   * 设置选框回调函数
+   * @param {Function} callback - 选框结束回调 function({startFreq, endFreq, centerFreq, bandwidth, span, startX, endX})
+   */
+  setSelectionBoxCallback(callback){
+    if(!this.options.selectionBox){
+      this.options.selectionBox = {};
+    }
+    this.options.selectionBox.onSelect = callback;
+  }
+
+  /**
+   * 设置选框功能开关
+   * @param {boolean} enabled - 是否启用选框
+   */
+  setSelectionBoxEnabled(enabled){
+    if(!this.options.selectionBox){
+      this.options.selectionBox = {};
+    }
+    this.options.selectionBox.enabled = !!enabled;
+  }
+
+  /**
+   * 获取当前选框配置
+   * @returns {Object} 选框配置对象
+   */
+  getSelectionBoxConfig(){
+    return this.options.selectionBox || { enabled: false };
+  }
+
   /**
    * 设置图表大小
    * @param {*} widhts 宽度
@@ -2533,6 +2860,41 @@ class sptmChart {
     this.initOptions(newoptions);
     // 同步瀑布图配置
     this._waterfall.applyConfig(this.options.waterfall);
+  }
+
+  /**
+   * 切换图表类型（瀑布图 <-> 折线图）
+   * @param {'line'|'waterfall'} type - 目标图表类型
+   * @param {Object} [extraOptions] - 可选的额外配置，会与当前 options 合并（如 center_freq、span 等）
+   */
+  setChartType(type, extraOptions = {}) {
+    if (type !== 'line' && type !== 'waterfall') {
+      console.warn('[sptmChart] setChartType: 不支持的类型，只接受 "line" 或 "waterfall"');
+      return;
+    }
+    if (this.options.chart_type === type) return;
+
+    // 停止当前刷新
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+      this.refreshInterval = null;
+    }
+
+    // 合并新 chart_type 及额外配置
+    const patchOptions = deepMerge({ chart_type: type }, extraOptions);
+    const mergedOptions = deepMerge(this.options, patchOptions);
+    this.initOptions(mergedOptions);
+
+    // 同步瀑布图模块配置
+    this._waterfall.applyConfig(this.options.waterfall);
+
+    // 切换到瀑布图时，清空旧帧缓冲，避免历史数据干扰
+    if (type === 'waterfall') {
+      this._waterfall.clearData();
+    }
+
+    // 重新绘制
+    this.drawChart();
   }
   
 
