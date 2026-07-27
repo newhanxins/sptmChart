@@ -2285,7 +2285,7 @@ class sptmChart {
             let order=mouseVal.order;
             if(order!==null){
               let labelInfo=this.xLabelGridInfo[order];
-              let moveVal=Math.ceil(Math.abs(labelInfo.show_end_freq-labelInfo.show_start_freq)/labelInfo.width*moveX);
+              let moveVal=(labelInfo.show_end_freq-labelInfo.show_start_freq)/labelInfo.width*moveX;
               if(moveVal==0)moveVal=Math.sign(moveX);
               let minval=labelInfo.show_start_freq-moveVal;
               let maxval=labelInfo.show_end_freq-moveVal;
@@ -2299,7 +2299,7 @@ class sptmChart {
               }
             }
           }else{
-            let moveVal=Math.ceil(Math.abs(this.options.yaxis.max_value-this.options.yaxis.min_value)/this.chartHeight*moveY);
+            let moveVal=(this.options.yaxis.max_value-this.options.yaxis.min_value)/this.chartHeight*moveY;
             if(moveVal==0)moveVal=Math.sign(moveY);
             let minval=this.options.yaxis.min_value-moveVal;
             let maxval=this.options.yaxis.max_value-moveVal;
@@ -3014,10 +3014,11 @@ class sptmChart {
           let order=mouseVal.order;
           let labelInfo=this.xLabelGridInfo[order];
           let initSpan=labelInfo.span;
-          let newZoom=labelInfo.draw_zoom+delta*4;
-          let zoomSpan = Math.floor(initSpan /newZoom/2)*2;
+          let newZoom=labelInfo.draw_zoom+delta;
+          let zoomSpan = Math.max(6, Math.floor(initSpan / newZoom));
           if(zoomSpan<=initSpan&&zoomSpan>=6){
-            let centerVal=mouseVal.x;
+            let pointx = event.offsetX - this.options.grid.left;
+            let centerVal = labelInfo.show_start_freq + (pointx - labelInfo.start_x) / labelInfo.width * (labelInfo.show_end_freq - labelInfo.show_start_freq);
             let minValue=Math.floor(centerVal-(centerVal-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*zoomSpan);
             let maxValue=Math.floor(minValue+zoomSpan);
             if(minValue<labelInfo.start_freq){
@@ -3082,11 +3083,12 @@ class sptmChart {
         let order=mouseVal.order;
         let labelInfo=this.xLabelGridInfo[order];
         let initSpan=labelInfo.span;
-        let newZoom=labelInfo.draw_zoom+delta*4;
-        let zoomSpan = Math.floor(initSpan /newZoom/2)*2;
+        let newZoom=labelInfo.draw_zoom+delta;
+        let zoomSpan = Math.max(6, Math.floor(initSpan / newZoom));
         if(zoomSpan>initSpan)return false;
         if(zoomSpan < 6)return false;
-        let centerVal=mouseVal.x;
+        let pointx = event.offsetX - this.options.grid.left;
+        let centerVal = labelInfo.show_start_freq + (pointx - labelInfo.start_x) / labelInfo.width * (labelInfo.show_end_freq - labelInfo.show_start_freq);
         let minValue=Math.floor(centerVal-(centerVal-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*zoomSpan);
         let maxValue=Math.floor(minValue+zoomSpan);
         if(minValue<labelInfo.start_freq){
