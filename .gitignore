@@ -40,3 +40,7 @@ yarn-error.log*
 .env.local
 *.key
 config.local.json
+
+
+# 忽略所有文件名中包含“副本”的文件（无论位于哪个目录）
+*副本*

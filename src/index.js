@@ -1,5 +1,5 @@
 import './index.css'
-import {deepMerge,deepCopy,calculateStepValues,calculateWidths,truncateNumber} from './utils'
+import {deepMerge,deepCopy,calculateStepValues,calculateWidths,truncateNumber,extractTwoPolesTraceLine,extractTwoPolesTraceLine2,debounce,throttle} from './utils'
 import { MarkerItem } from './module/MarkerItem.js'
 import { Waterfall } from './module/Waterfall.js'
 
@@ -20,7 +20,7 @@ class sptmChart {
     this.box.appendChild(this.canvas);
     this.ctx = this.canvas.getContext('2d');
     this.ctx.imageSmoothingEnabled = true; // 启用抗锯齿
-    this.initOptions(options);
+    this._initOptions(options);
     this.setCanvasSize();
     this.refreshInterval=null;
     this.isDraw=true
@@ -52,30 +52,48 @@ class sptmChart {
     this.yZoom=1//y轴缩放比例
     this.tracesData=[];//数据
     this.focusType="";//聚焦类型 grid|left|right|bottom|threshold|marker
-    this.throttleDelay=options.throttleDelay||100;//节流延迟
-    this.lastCallTime=0//用于节流时间
-    this.wheelListener=this.handleWheel.bind(this)
+    this.wheelListener=this._handleWheel.bind(this)
 
     // 绘制调度优化：使用 requestAnimationFrame 避免一帧内多次重绘
     this._drawRafId = null;      // 当前挂起的 raf id
     this._drawPending = false;   // 是否有待执行的绘制
     this._resizeTimer = null;    // resize debounce 定时器
-    this.init();
-    this.canvas.addEventListener('mousedown', this.mousedown.bind(this));
-    this.canvas.addEventListener('mouseup',this.mouseup.bind(this))
-    this.canvas.addEventListener('mousemove', this.mousemove.bind(this));
-    this.canvas.addEventListener('mouseout',this.mouseout.bind(this))
+    //========== FPS帧数统计初始化 ==========
+    this._fpsTimestamps = [];    // 记录最近1秒内的数据接收时间戳
+    this._fpsCurrentValue = 0;   // 当前计算的FPS值
+    this._fpsLastCalcTime = 0;   // 上次计算FPS的时间
+    this._fpsLastDataSig = null; // DScan模式下data[0].data的上一帧签名
+    //=====================================
+    this._init();
+    // 绑定并保存事件回调引用，以便 destroy() 时正确移除
+    this._boundHandleMousedown = this._handleMousedown.bind(this);
+    this._boundHandleMouseup = this._handleMouseup.bind(this);
+    this._boundHandleMousemove = this._handleMousemove.bind(this);
+    this._boundHandleMouseout = this._handleMouseout.bind(this);
+    this._boundHandleDblClick = this._handleDblClick.bind(this);
+    this._boundHandleClick = this._handleClick.bind(this);
+    this._boundHandleContextMenu = this._handleContextMenu.bind(this);
+    this._boundHandleKeydown = this._handleKeydown.bind(this);
+    this._boundHandleKeyup = this._handleKeyup.bind(this);
+    this._boundResizeHandler = debounce(() => {
+      this.resizeCanvas();
+    }, 200);
+    // 节流处理：限制重绘频率
+    this._throttledScheduleDraw = throttle(() => this._scheduleDraw(), 100);
+    this._throttledHandleZoom = throttle((event, delta) => this._handleZoom(event, delta), 100);
+
+    this.canvas.addEventListener('mousedown', this._boundHandleMousedown);
+    this.canvas.addEventListener('mouseup', this._boundHandleMouseup);
+    this.canvas.addEventListener('mousemove', this._boundHandleMousemove);
+    this.canvas.addEventListener('mouseout', this._boundHandleMouseout);
     this.canvas.addEventListener('wheel', this.wheelListener);
-    this.canvas.addEventListener('dblclick', this.handleDblClick.bind(this));
-    this.canvas.addEventListener('click', this.handleClick.bind(this));
-    this.canvas.addEventListener('contextmenu', this.handleContextMenu.bind(this));
-    window.addEventListener('keydown', this.handleKeydown.bind(this));
-    window.addEventListener('keyup', this.handleKeyup.bind(this));
+    this.canvas.addEventListener('dblclick', this._boundHandleDblClick);
+    this.canvas.addEventListener('click', this._boundHandleClick);
+    this.canvas.addEventListener('contextmenu', this._boundHandleContextMenu);
+    window.addEventListener('keydown', this._boundHandleKeydown);
+    window.addEventListener('keyup', this._boundHandleKeyup);
     // 监听窗口调整大小（添加 debounce，避免拖拽窗口时频繁重绘）
-    window.addEventListener('resize', () => {
-      clearTimeout(this._resizeTimer);
-      this._resizeTimer = setTimeout(() => this.resizeCanvas(), 200);
-    });
+    window.addEventListener('resize', this._boundResizeHandler);
     //鼠标按下事件
     this.mousedownInfo={
       isMouseDown:false,
@@ -105,9 +123,9 @@ class sptmChart {
     }
     this._suppressClick=false;
     //初始门限滑块
-    this.initthreshold();
+    this._initThreshold();
     //初始化提示框
-    this.initFredTip();
+    this._initFredTip();
     
     //根据配置初始化Marker
     if(this.options.marker?.visible!==false && this.options.marker?.autoAdd!==false){
@@ -191,7 +209,7 @@ class sptmChart {
    * 结束选框并触发回调
    * @private
    */
-  _endSelectionBox() {
+  _endSelectionBox(event) {
     const sb = this.options.selectionBox;
     const startX = this._selectionBox.startX;
     const startY = this._selectionBox.startY;
@@ -210,14 +228,14 @@ class sptmChart {
     const maxX = Math.min(this.width - grid.right, Math.max(startX, currentX));
     const minW = sb?.minWidth || 5;
     if (maxX - minX < minW) {
-      this.draw();
+      this._scheduleDraw();
       return;
     }
 
     const rawStartFreq = this._xToFreq(minX);
     const rawEndFreq = this._xToFreq(maxX);
     if (rawStartFreq === null || rawEndFreq === null) {
-      this.draw();
+      this._scheduleDraw();
       return;
     }
 
@@ -226,7 +244,7 @@ class sptmChart {
     const centerFreq = Math.round((startFreq + endFreq) / 2);
     const bandwidth = Math.abs(endFreq - startFreq);
 
-    this.draw();
+    this._scheduleDraw();
 
     if (typeof sb?.onSelect === 'function') {
       sb.onSelect({
@@ -236,8 +254,11 @@ class sptmChart {
         bandwidth,
         span: bandwidth,
         startX: minX,
-        endX: maxX
-      });
+        endX: maxX,
+        startY,
+        endY:currentY,
+        centerY: (startY + currentY) / 2
+      },event);
     }
   }
 
@@ -553,8 +574,8 @@ class sptmChart {
     marker.setMarkerPt({x:clampedX,y:clampedY});
     marker.setScutchonAnchor({x:clampedX,y:clampedY});
     this._updateMarkerData(marker);
-    
-    this.draw();
+
+    this._draw();
   }
 
   /**
@@ -643,7 +664,7 @@ class sptmChart {
    * @param {*} options
    * @memberof sptmChart
    */
-  initOptions(options) {
+  _initOptions(options) {
     let defaultOptions = {
       "type": "FFT",//图表类型 "FFT" "DScan"
       "duration": 50,//一帧持续时间
@@ -774,6 +795,17 @@ class sptmChart {
         "show_current_freq": true,//显示当前频率（Marker 频率）
         "show_level": true,//显示当前强度
       },
+      "fps":{ //帧数统计信息框 - 新增
+        "visible": false,//是否显示帧数统计
+        "position": "top-right",//位置：top-left, top-center, top-right, bottom-left, bottom-center, bottom-right
+        "offsetX": 0,//X 方向偏移量
+        "offsetY": 0,//Y 方向偏移量
+        "background": "rgba(0, 0, 0, 0.7)",//背景颜色
+        "text_color": "#00FF00",//文本颜色
+        "font_size": 12,//字体大小
+        "padding": 4,//内边距
+        "border_radius": 2,//圆角半径
+      },
       "threshold":{ //门限样式
         "visible": false,//是否显示门限
         "is_darg":true,//是否可以拖拽门限
@@ -871,17 +903,17 @@ class sptmChart {
   }
 
   
-  init(){
-    this.clearCanvas();
-    this.initBackground();
-    this.drawAxis();
-    this.drawGrid();
+  _init(){
+    this._clearCanvas();
+    this._initBackground();
+    this._drawAxis();
+    this._drawGrid();
   }
   
   /*
    *初始化门限div
   */
-  initthreshold(){
+  _initThreshold(){
     const thresholdDiv = document.createElement('div');
     thresholdDiv.className = 'sptmchart_threshold';
     thresholdDiv.style.position = 'absolute';
@@ -894,13 +926,16 @@ class sptmChart {
     thresholdDiv.style.display = 'none';
     this.canvas.parentNode.appendChild(thresholdDiv);
     this.thresholdDiv = thresholdDiv;
-    this.thresholdDiv.addEventListener('mousedown', this.thresholdMousedown.bind(this));
-    this.thresholdDiv.addEventListener('mousemove', this.thresholdMousemove.bind(this));
-    this.thresholdDiv.addEventListener('mouseout', this.thresholdMouseout.bind(this));
-    this.thresholdDiv.addEventListener('mouseup', this.thresholdMouseout.bind(this));
+    this._boundHandleThresholdMousedown = this._handleThresholdMousedown.bind(this);
+    this._boundHandleThresholdMousemove = this._handleThresholdMousemove.bind(this);
+    this._boundHandleThresholdMouseout = this._handleThresholdMouseout.bind(this);
+    this.thresholdDiv.addEventListener('mousedown', this._boundHandleThresholdMousedown);
+    this.thresholdDiv.addEventListener('mousemove', this._boundHandleThresholdMousemove);
+    this.thresholdDiv.addEventListener('mouseout', this._boundHandleThresholdMouseout);
+    this.thresholdDiv.addEventListener('mouseup', this._boundHandleThresholdMouseout);
   }
   
-  initFredTip(){
+  _initFredTip(){
     const freqTip= document.createElement('span');
     freqTip.className = 'sptmchart_freqtip';
     freqTip.style.display = 'none';
@@ -914,14 +949,14 @@ class sptmChart {
   /**
    *清空画布
    */
-  clearCanvas(){
+  _clearCanvas(){
     this.ctx.clearRect(0, 0, this.width, this.height);
   }
   
   /**
    * 初始化背景
    */
-  initBackground(){
+  _initBackground(){
     this.ctx.fillStyle = this.options.background;
     this.ctx.fillRect(0, 0, this.width, this.height);
   }
@@ -929,9 +964,9 @@ class sptmChart {
   /**
    * 初始化图表
    */
-  drawAxis(){
+  _drawAxis(){
     //计算x轴y轴坐标
-    this.cumputeLabels();
+    this._computeLabels();
     // 绘制x轴
     this.ctx.strokeStyle = this.options.xaxis.color;
     this.ctx.lineWidth = this.options.xaxis.width||1;
@@ -1023,7 +1058,7 @@ class sptmChart {
   /**
    * 绘制图例
    */
-  drawLegend() {
+  _drawLegend() {
     const { grid, legend } = this.options;
     if(!legend.visible)return false;
     
@@ -1054,7 +1089,7 @@ class sptmChart {
   /**
    * 绘制网格
    */
-  drawGrid(){
+  _drawGrid(){
     // 瀑布图模式：不在网格区域绘制背景和网格线（由 Waterfall 模块接管）
     if (this.options.chart_type === 'waterfall') {
       // 仍然绘制背景
@@ -1122,17 +1157,19 @@ class sptmChart {
   /**
    * 绘制画布
   */
-  draw(){
-    this.clearCanvas();
-    this.drawAxis();
-    this.drawGrid();
-    this.drawLegend();
-    this.drawTraces();
-    this.drawOther();
+  _draw(){
+    this._clearCanvas();
+    this._drawAxis();
+    this._drawGrid();
+    this._drawLegend();
+    this._drawTraces();
+    this._drawOther();
     //绘制Markers
     this._drawMarkers();
     // 绘制中心频率信息框
-    this.drawCenterInfoBox();
+    this._drawCenterInfoBox();
+    // 绘制 FPS 帧数统计
+    this._drawFps();
     // 绘制选框
     this._drawSelectionBox();
   }
@@ -1141,12 +1178,12 @@ class sptmChart {
   * 清除画布绘制
   */
   clearDraw(){
-    this.clearCanvas();
+    this._clearCanvas();
   }
   clearData(){
-    this.clearCanvas();
-    this.drawAxis();
-    this.drawGrid();
+    this._clearCanvas();
+    this._drawAxis();
+    this._drawGrid();
     // 瀑布图模式：同时清空帧缓冲
     if (this.options.chart_type === 'waterfall') {
       this._waterfall.clearData();
@@ -1158,7 +1195,7 @@ class sptmChart {
    */
   clearWaterfallData(){
     this._waterfall.clearData();
-    this.drawChart();
+    this._draw();
   }
 
   /**
@@ -1176,29 +1213,28 @@ class sptmChart {
    */
   setWaterfallColorRange(min, max){
     this._waterfall.setColorRange(min, max);
-    this.drawChart();
+    this._draw();
   }
   /**
    * 绘制图表
    */
   drawChart(){
-    if(this.refreshInterval){
-      clearInterval(this.refreshInterval);
-      this.refreshInterval=null;
-    }
-    if(this.options.duration&&this.options.duration>0&&this.isDraw){
-      this.refreshInterval=setInterval(()=>{
-        this.draw();
-      },this.options.duration)
-    }else{
-      this.draw();
-    }
+    // if(this.refreshInterval){
+    //   clearInterval(this.refreshInterval);
+    //   this.refreshInterval=null;
+    // }
+    // if(this.options.duration&&this.options.duration>0&&this.isDraw){
+    //   this.refreshInterval=setInterval(()=>{
+    //     this._draw();
+    //   },this.options.duration)
+    // }
+    this._draw();
   }
   
   /**
    * 绘制门限
    */
-  drawThreshold(){
+  _drawThreshold(){
     if(this.options.threshold.visible){
       let colors=this.options.threshold.color;
       let widhts=this.options.threshold.width;
@@ -1248,7 +1284,7 @@ class sptmChart {
   /**
    * 绘制提示线
    */
-  drawTipLine(){
+  _drawTipLine(){
     if(this.options.level_tipline.visible&&this.options.level_tipline.point.pointx&&this.tracesData.length>0){
       let point=this.options.level_tipline.point
       let mouselevel=this.getMousePositionLevel(point)
@@ -1263,7 +1299,7 @@ class sptmChart {
         this.ctx.moveTo(point.pointx,this.options.grid.top);
         this.ctx.lineTo(point.pointx, this.height-this.options.grid.bottom);
         this.ctx.stroke();
-        this.tipFreqLevel(mouselevel)
+        this._tipFreqLevel(mouselevel)
       }else{
         this.options.level_tipline.is_draw=false;
         this.fretipDiv.style.display="none";
@@ -1275,17 +1311,17 @@ class sptmChart {
     }
   }
   
-  drawOther(){
+  _drawOther(){
     //绘制门限
-    this.drawThreshold();
+    this._drawThreshold();
     //绘制提示线
-    this.drawTipLine();
+    this._drawTipLine();
   }
   
     /**
    * 绘制中心频率信息框
    */
-  drawCenterInfoBox(){
+  _drawCenterInfoBox(){
     if(!this.options.centerinfo.visible)return;
     
     const info = this.options.centerinfo;
@@ -1407,8 +1443,101 @@ class sptmChart {
     this.ctx.restore();
   }
 
-  
+  /**
+   * 绘制 FPS 帧数统计信息框
+   */
+  _drawFps(){
+    if (!this.options.fps?.visible) return;
+    if (this._fpsCurrentValue <= 0) return;
 
+    const info = this.options.fps;
+    const padding = info.padding * this.devicePixelRatio;
+    const fontSize = info.font_size * this.devicePixelRatio;
+    const lineHeight = fontSize * 1.4;
+
+    // 构建显示内容
+    const lines = [];
+    const modeText = this.options.type === 'DScan' ? 'DScan' : 'FFT';
+    lines.push(`FPS: ${this._fpsCurrentValue}`);
+
+    // 计算文本框大小
+    this.ctx.font = `${fontSize}px Arial`;
+    let maxWidth = 0;
+    for (const line of lines) {
+      const metrics = this.ctx.measureText(line);
+      if (metrics.width > maxWidth) maxWidth = metrics.width;
+    }
+
+    const boxWidth = maxWidth + padding * 2;
+    const boxHeight = lines.length * lineHeight + padding * 2;
+    const borderRadius = info.border_radius * this.devicePixelRatio;
+
+    // 计算位置
+    let boxX, boxY;
+    const baseOffsetX = info.offsetX * this.devicePixelRatio;
+    const baseOffsetY = info.offsetY * this.devicePixelRatio;
+
+    switch (info.position) {
+      case 'top-left':
+        boxX = baseOffsetX;
+        boxY = baseOffsetY;
+        break;
+      case 'top-center':
+        boxX = (this.width - boxWidth) / 2 + baseOffsetX;
+        boxY = baseOffsetY;
+        break;
+      case 'top-right':
+        boxX = this.width - boxWidth + baseOffsetX;
+        boxY = baseOffsetY;
+        break;
+      case 'bottom-left':
+        boxX = baseOffsetX;
+        boxY = this.height - boxHeight + baseOffsetY;
+        break;
+      case 'bottom-center':
+        boxX = (this.width - boxWidth) / 2 + baseOffsetX;
+        boxY = this.height - boxHeight + baseOffsetY;
+        break;
+      case 'bottom-right':
+        boxX = this.width - boxWidth + baseOffsetX;
+        boxY = this.height - boxHeight + baseOffsetY;
+        break;
+      default:
+        boxX = (this.width - boxWidth) / 2;
+        boxY = baseOffsetY;
+    }
+
+    // 绘制背景
+    this.ctx.save();
+    this.ctx.fillStyle = info.background;
+
+    // 绘制圆角矩形
+    const r = borderRadius;
+    this.ctx.beginPath();
+    this.ctx.moveTo(boxX + r, boxY);
+    this.ctx.lineTo(boxX + boxWidth - r, boxY);
+    this.ctx.quadraticCurveTo(boxX + boxWidth, boxY, boxX + boxWidth, boxY + r);
+    this.ctx.lineTo(boxX + boxWidth, boxY + boxHeight - r);
+    this.ctx.quadraticCurveTo(boxX + boxWidth, boxY + boxHeight, boxX + boxWidth - r, boxY + boxHeight);
+    this.ctx.lineTo(boxX + r, boxY + boxHeight);
+    this.ctx.quadraticCurveTo(boxX, boxY + boxHeight, boxX, boxY + boxHeight - r);
+    this.ctx.lineTo(boxX, boxY + r);
+    this.ctx.quadraticCurveTo(boxX, boxY, boxX + r, boxY);
+    this.ctx.closePath();
+    this.ctx.fill();
+
+    // 绘制文本
+    this.ctx.fillStyle = info.text_color;
+    this.ctx.textAlign = 'left';
+    this.ctx.textBaseline = 'top';
+
+    for (let i = 0; i < lines.length; i++) {
+      const textY = boxY + padding + i * lineHeight;
+      this.ctx.fillText(lines[i], boxX + padding, textY);
+    }
+
+    this.ctx.restore();
+  }
 
   /**
    *停止绘制
@@ -1430,7 +1559,7 @@ class sptmChart {
   setWaterfallRowHeightMode(mode){
     if (this.options.chart_type !== 'waterfall') return;
     this._waterfall.setRowHeightMode(mode);
-    this.drawChart();
+    this._draw();
   }
 
   /**
@@ -1440,13 +1569,13 @@ class sptmChart {
   setWaterfallRowScale(scale){
     if (this.options.chart_type !== 'waterfall') return;
     this._waterfall.setRowScale(scale);
-    this.drawChart();
+    this._draw();
   }
   
   /**
    * 绘制谱线
    */
-  drawTraces(){
+  _drawTraces(){
     // 瀑布图模式
     if (this.options.chart_type === 'waterfall') {
       const useImageData = this.options.waterfall?.use_image_data !== false;
@@ -1458,7 +1587,7 @@ class sptmChart {
       if (this.tracesData[i].datainfo?.length>0&&this.tracesData[i].visible) {
         let linedata=this.tracesData[i].datainfo
         for (let j = 0; j < linedata.length; j++) {
-          this.drawTypeLine(this.tracesData[i],j);
+          this._drawTypeLine(this.tracesData[i],j);
         }
       }
     }
@@ -1469,7 +1598,7 @@ class sptmChart {
    * 判断绘制图表线类型
    * @param {*} datas 
    */
-  drawTypeLine(lineData,order){
+  _drawTypeLine(lineData,order){
     let data={...lineData.datainfo[order]};
     data.width=lineData.width;
     data.color=lineData.color;
@@ -1493,7 +1622,7 @@ class sptmChart {
     //数据抽点处理
     if(data.drawData.length>drawWidth){
       data.lineType='pointline';
-      let pointdata=this.extractTwoPolesTraceLine(data.data,data.data.length,drawWidth);
+      let pointdata=extractTwoPolesTraceLine(data.data,data.data.length,drawWidth);
       data.drawData=pointdata;
     }else if(data.drawData.length===drawWidth){
       data.lineType='line';
@@ -1502,14 +1631,14 @@ class sptmChart {
       data.lineType='step';
     }
     
-    this.drawLine(data);
+    this._drawLine(data);
   }
 
   /**
    * 绘制线
    * @param {*} datas 谱线数据
    */
-  drawLine(data){
+  _drawLine(data){
     this.ctx.save();
     this.ctx.beginPath();
     this.ctx.rect(
@@ -1539,7 +1668,12 @@ class sptmChart {
         let startPointPx=labelInfo.start_x;
         let startx=this.options.grid.left+startPointPx;
         let x = startx + i * drawStepPx;
-        if(x>this.width-this.options.grid.right||x<this.options.grid.left)break;
+        let rightBoundary = this.width - this.options.grid.right;
+        let leftBoundary = this.options.grid.left;
+        let epsilon = 0.5;
+        if(x > rightBoundary + epsilon || x < leftBoundary - epsilon){
+          break
+        };
         let y = this.height - this.options.grid.bottom - ((point - this.options.yaxis.min_value) /(this.options.yaxis.max_value - this.options.yaxis.min_value)) * this.chartHeight;
         if(i==0){
           this.ctx.moveTo(x, y);
@@ -1572,7 +1706,12 @@ class sptmChart {
         let startPointPx=labelInfo.start_x;
         let startx=this.options.grid.left+startPointPx;
         let x = startx+ i * drawStepPx;
-        if(x>this.width-this.options.grid.right||x<this.options.grid.left)break;
+        let rightBoundary = this.width - this.options.grid.right;
+        let leftBoundary = this.options.grid.left;
+        let epsilon = 0.5;
+        if(x > rightBoundary + epsilon || x < leftBoundary - epsilon){
+          break
+        };
         let y = this.height - this.options.grid.bottom - ((point - this.options.yaxis.min_value) /(this.options.yaxis.max_value - this.options.yaxis.min_value)) * this.chartHeight;
         let y1 = this.height - this.options.grid.bottom - ((minpoint - this.options.yaxis.min_value) /(this.options.yaxis.max_value - this.options.yaxis.min_value)) * this.chartHeight;
         if(i==0){
@@ -1589,132 +1728,6 @@ class sptmChart {
     this.ctx.restore();
   }
   
-
- /**
-   * 保留最大最小方式抽点
-   * @param {*} data 源数据
-   * @param {*} dataLen 源数据长度
-   * @param {*} targetLen 目标长度
-   */
-  extractTwoPolesTraceLine(data,dataLen,targetLen){
-    let targetData=[];
-    let dataIndex=[];
-    let targetCout=0;
-    let selectIndex=this.selectDataIndex(dataLen,targetCout,targetLen);
-    let isMaxSelected=false;
-    let maxValue=0,minValue=0;
-    let maxIndex=-1,minIndex=-1;
-    
-    for(let j=0;j<dataLen;j++){
-      if(isMaxSelected){
-        if(data[j]>maxValue){
-          maxValue=data[j];
-          maxIndex=j;
-        }
-        if(data[j]<minValue){
-          minValue=data[j];
-          minIndex=j;
-        }
-      }else{
-        maxValue=data[j];
-        minValue=data[j];
-        maxIndex=j;
-        minIndex=j;
-        isMaxSelected=true;
-      }
-      
-      if(selectIndex==j){
-        targetData[targetCout]=[maxValue,minValue];
-        dataIndex[targetCout]=[maxIndex,minIndex];
-        targetCout++;
-        isMaxSelected=false;
-        selectIndex=this.selectDataIndex(dataLen,targetCout,targetLen);
-      }
-    }
-    return {targetData,dataIndex};
-  }
-  /**
-   * 保留最大最小方式抽点
-   * @param {*} data 源数据
-   * @param {*} dataLen 源数据长度
-   * @param {*} targetLen 目标长度
-   */
-  extractTwoPolesTraceLine2(data,dataLen,targetLen){
-    // 预分配结果数组和配对数组，避免动态扩容和热循环中频繁创建小数组对象
-    const targetData = new Array(targetLen);
-    const dataIndex = new Array(targetLen);
-    for (let i = 0; i < targetLen; i++) {
-      targetData[i] = [0, 0];
-      dataIndex[i] = [0, 0];
-    }
-
-    // 预计算所有分割点索引（内联 selectDataIndex 逻辑，避免热循环中的函数调用开销）
-    // 调用方保证 dataLen > targetLen，使用公式：floor((i+1)*dataLen/targetLen)-1
-    const selectIndices = new Uint32Array(targetLen);
-    for (let i = 0; i < targetLen; i++) {
-      selectIndices[i] = Math.floor((i + 1) * dataLen / targetLen) - 1;
-    }
-
-    let targetCout = 0;
-    let isMaxSelected = false;
-    let maxValue = 0, minValue = 0;
-    let maxIndex = -1, minIndex = -1;
-    let selectIndex = selectIndices[0];
-    const d = data; // 局部引用，帮助 JIT 优化
-
-    for (let j = 0; j < dataLen; j++) {
-      const val = d[j];
-      if (isMaxSelected) {
-        if (val > maxValue) {
-          maxValue = val;
-          maxIndex = j;
-        } else if (val < minValue) {
-          minValue = val;
-          minIndex = j;
-        }
-      } else {
-        maxValue = val;
-        minValue = val;
-        maxIndex = j;
-        minIndex = j;
-        isMaxSelected = true;
-      }
-
-      if (j === selectIndex) {
-        const pair = targetData[targetCout];
-        pair[0] = maxValue;
-        pair[1] = minValue;
-
-        const idxPair = dataIndex[targetCout];
-        idxPair[0] = maxIndex;
-        idxPair[1] = minIndex;
-
-        targetCout++;
-        isMaxSelected = false;
-        if (targetCout < targetLen) {
-          selectIndex = selectIndices[targetCout];
-        }
-      }
-    }
-    return { targetData, dataIndex };
-  }
-  
-  /**
-   * 频谱源数据索引值
-   * @param {*} dataLen 源数据长度
-   * @param {*} targetIndex 目标索引值
-   * @param {*} targetLen 目标长度
-   */
-  selectDataIndex(dataLen,targetIndex,targetLen){
-    if(targetIndex>=dataLen||dataLen==0||targetLen==0)return 0;
-    if(targetLen==1)return Math.floor(dataLen/2);
-    if(targetLen==dataLen)return targetIndex;
-    if(dataLen>targetLen){
-      return Math.floor((targetIndex+1)*dataLen/targetLen)-1;
-    }else{
-      return Math.floor(targetIndex*dataLen/targetLen);
-    }
-  }
   
   /**
    * 添加谱线
@@ -1738,7 +1751,7 @@ class sptmChart {
       this._waterfall.applyConfig(this.options.waterfall);
     }
     this.isDraw=true;
-    this.drawChart();
+    this._draw();
   }
   
   /**
@@ -1747,15 +1760,44 @@ class sptmChart {
    * @param {*} data 谱线数据
    */
   setTraceData(id,data){
+    // FPS 帧数统计：按 setTraceData 接收次数统计每秒帧数
+    if (this.options.fps?.visible) {
+      let shouldCount = false;
+      // DScan 模式下 data 是数组，基于第一段数据做统计
+      if (this.options.type === 'DScan') {
+        if (this.tracesData.length > 0 && id === this.tracesData[0].id && Array.isArray(data) && data.length > 0 && data[0] && Array.isArray(data[0].data) && data[0].data.length > 0) {
+          const d = data[0].data;
+          // 轻量签名：长度 + 首元素 + 尾元素，内容变化时判定为新帧
+          const sig = d.length + ',' + d[0] + ',' + d[d.length - 1];
+          if (sig !== this._fpsLastDataSig) {
+            shouldCount = true;
+            this._fpsLastDataSig = sig;
+          }
+        }
+      }else{
+        shouldCount = true;
+      }
+      if (shouldCount) {
+        const now = Date.now();
+        this._fpsTimestamps.push(now);
+        // 清理 1 秒前的旧记录（使用 filter 替代 while+shift，避免高频调用时性能问题）
+        const oneSecondAgo = now - 1000;
+        this._fpsTimestamps = this._fpsTimestamps.filter(t => t >= oneSecondAgo);
+        this._fpsCurrentValue = this._fpsTimestamps.length;
+      }
+    }
     for (let i = 0; i < this.tracesData.length; i++) {
       if (this.tracesData[i].id === id) {
         if (this.options.chart_type === 'waterfall') {
           // 瀑布图模式：将数据追加到帧缓冲区（而非覆盖）
           // data 格式：{ point, step, start_freq, end_freq, width, data: [], time }
+          // 获取图表绘制区域高度
+          const chartHeight = this.height - this.options.grid.top - this.options.grid.bottom;
+          console.log('chartHeight', chartHeight);
           const maxRows = this.options.waterfall?.max_rows || 100;
           this._waterfall.pushRow(data, maxRows);
           this.isDraw = true;
-          this.drawChart();
+          this._draw();
           return;
         } else {
           this.tracesData[i].datainfo=data;
@@ -1764,7 +1806,7 @@ class sptmChart {
       }
     }
     this.isDraw=true;
-    this.drawChart();
+    this._draw();
   }
   
   /**
@@ -1780,12 +1822,12 @@ class sptmChart {
       }
     }
     this.isDraw=true;
-    this.drawChart();
+    this._draw();
   }
   /**
    * 计算标签
    */
-  cumputeLabels(){
+  _computeLabels(){
     this.options.xaxis.labels=[];
     this.options.yaxis.labels=[];
     
@@ -1969,7 +2011,7 @@ class sptmChart {
    * 鼠标按下事件
    * @param {*} event 
    */
-  mousedown(event) {
+  _handleMousedown(event) {
     //先检查是否点击了Marker
     const rect=this.canvas.getBoundingClientRect();
     const point={
@@ -2020,7 +2062,7 @@ class sptmChart {
     // 选框功能：在网格区域按下时启动 pending 状态
     const sb = this.options.selectionBox;
     if (sb && sb.enabled && event.button === 0) {
-      const posType = this.getMousePosition(event);
+      const posType = this._getMousePosition(event);
       if (posType === 'grid') {
         this._selectionBox.pending = true;
         this._selectionBox.startX = event.offsetX;
@@ -2034,7 +2076,7 @@ class sptmChart {
           if (this._selectionBox.pending) {
             this._selectionBox.active = true;
             this._selectionBox.pending = false;
-            this.draw();
+            this._scheduleDraw();
           }
         }, delay);
       }
@@ -2045,7 +2087,7 @@ class sptmChart {
    * 鼠标松开事件
    * @param {*} event
    */
-  mouseup(event) {
+  _handleMouseup(event) {
     // 取消可能挂起的 raf 绘制，避免交互结束后再执行一次多余绘制
     this._cancelScheduledDraw();
     // 瀑布图模式：结束色系拖动
@@ -2062,7 +2104,7 @@ class sptmChart {
       }
       this._markerDragState.isDragging=false;
       this._markerDragState.dragMarkerId=0;
-      this.draw();
+      this._scheduleDraw();
       return;
     }
     
@@ -2080,7 +2122,7 @@ class sptmChart {
 
     // 选框功能：处理选框结束
     if (this._selectionBox.active) {
-      this._endSelectionBox();
+      this._endSelectionBox(event);
       this._suppressClick = true;
       return;
     }
@@ -2095,7 +2137,7 @@ class sptmChart {
    * 鼠标移动
    * @param {*} event 
    */
-  mousemove(event) {
+  _handleMousemove(event) {
     //拖动
     if(this._markerDragState.isDragging){
       const rect=this.canvas.getBoundingClientRect();
@@ -2201,14 +2243,12 @@ class sptmChart {
         }
       }
     }else{
-      let type=this.getMousePosition(event);
+      let type=this._getMousePosition(event);
       if(type=="grid"){
         let point=this.getMousePoint(event);
         this.options.level_tipline.point=point;
         // 使用 throttle 节流，避免频繁重绘导致卡顿
-        this.throttle(()=>{
-          this.draw();
-        });
+        this._throttledScheduleDraw();
       }
     }
     
@@ -2226,7 +2266,7 @@ class sptmChart {
    * 鼠标移出控件
    * @param {*} event 
    */
-  mouseout(event){
+  _handleMouseout(event){
     event.preventDefault();
     this._cancelScheduledDraw();
     this.mousedownInfo.isMouseDown=false;
@@ -2242,23 +2282,12 @@ class sptmChart {
    * @param {*} event
    * 
    */
-  handleWheel(event) {
+  _handleWheel(event) {
     event.preventDefault();
     const delta = event.deltaY < 0 ? 1 : -1;
-    this.throttle(()=>{
-      this.handleZoom(event,delta);
-    });
+    this._throttledHandleZoom(event, delta);
   }
   
-  throttle(callback){
-    const now=Date.now();
-    if(!this.lastCallTime)this.lastCallTime=0;
-    if(now-this.lastCallTime>=this.throttleDelay){
-      this.lastCallTime=now;
-      callback();
-    }
-  }
-
   /**
    * 使用 requestAnimationFrame 调度一次 draw()，避免一帧内多次重绘
    * 适合高频交互场景（Marker 拖动、选框、平移等）
@@ -2270,7 +2299,7 @@ class sptmChart {
     this._drawRafId = requestAnimationFrame(() => {
       this._drawPending = false;
       this._drawRafId = null;
-      this.draw();
+      this._draw();
     });
   }
 
@@ -2285,7 +2314,7 @@ class sptmChart {
     this._drawRafId = requestAnimationFrame(() => {
       this._drawPending = false;
       this._drawRafId = null;
-      this.draw();
+      this._draw();
     });
   }
 
@@ -2305,7 +2334,7 @@ class sptmChart {
    * 双击事件
    * @param {*} event
    */
-  handleDblClick(event) {
+  _handleDblClick(event) {
     console.log("handleDblClick", event);
     // 获取当前频率
     const mouseVal=this.getMouseVal(event);
@@ -2315,7 +2344,7 @@ class sptmChart {
    * 点击事件
    * @param {*} event 
    */
-  handleClick(event) {
+  _handleClick(event) {
     // 如果刚刚完成了选框操作，抑制本次 click 避免误触发
     if (this._suppressClick) {
       this._suppressClick = false;
@@ -2334,7 +2363,7 @@ class sptmChart {
     }
     
     //如果没有点击Marker，且在网格区域，移动焦点Marker
-    const type=this.getMousePosition(event);
+    const type=this._getMousePosition(event);
     if(type=="grid" && this._focusMarkerId>0){
       this._moveFocusMarkerToPoint(point);
     }else if(type !== "grid" && this._focusMarkerId>0 && this.options.marker?.clickBlankToExit){
@@ -2347,7 +2376,7 @@ class sptmChart {
    * 鼠标右键事件
    * @param {*} event
    */
-  handleContextMenu(event) {
+  _handleContextMenu(event) {
     event.preventDefault();
 
     // 检查是否启用了右键菜单
@@ -2364,7 +2393,7 @@ class sptmChart {
    * 按键按下事件
    * @param {*} event
    */
-  handleKeydown(event) {
+  _handleKeydown(event) {
     switch (event.keyCode) {
       case 37:
         console.log("左箭头");
@@ -2385,7 +2414,7 @@ class sptmChart {
    * 按键松开事件
    * @param {*} event 
    */
-  handleKeyup(event) {
+  _handleKeyup(event) {
     console.log("handleKeyup按键松开事件", event);
   }
   
@@ -2393,7 +2422,7 @@ class sptmChart {
    * 门限图标鼠标按下事件
    * @param {*} event 
    */
-  thresholdMousedown(event) {
+  _handleThresholdMousedown(event) {
     this.focusType="threshold";
     this.thresholdFouce=true;
   }
@@ -2402,7 +2431,7 @@ class sptmChart {
    * 门限拖动事件
    * @param {*} event 
    */
-  thresholdMousemove(event) {
+  _handleThresholdMousemove(event) {
     if(this.thresholdFouce){
       const leves=this.getMouseVal(event,2).y;
       this.options.threshold.level=leves;
@@ -2414,14 +2443,14 @@ class sptmChart {
    * 门限拖动结束事件
    * @param {*} event 
    */
-  thresholdMouseout(event) {
+  _handleThresholdMouseout(event) {
     this.thresholdFouce=false;
   }
   
   /*
   *显示强度提示框
   */
-  tipFreqLevel(data){
+  _tipFreqLevel(data){
     if(this.options.level_tipline.is_draw){
       this.fretipDiv.style.display="block";
       if(data.pointx - this.options.grid.left > this.chartWidth/2){
@@ -2473,7 +2502,7 @@ class sptmChart {
    */
   resizeCanvas() {
     this.setCanvasSize();
-    this.draw();
+    this._draw();
   }
   
   /**
@@ -2517,7 +2546,7 @@ class sptmChart {
       this.options.height=heights;
     }
     this.setCanvasSize(widths, heights);
-    this.draw();
+    this._draw();
   }
   
   /**
@@ -2574,10 +2603,10 @@ class sptmChart {
    * @param {*} delta 
    * @returns 
    */
-  handleZoom(event,delta) {
+  _handleZoom(event,delta) {
     // 瀑布图模式：色系条 / 时间轴 / 行缩放 + X轴缩放
     if (this.options.chart_type === 'waterfall') {
-      let type=this.getMousePosition(event);
+      let type=this._getMousePosition(event);
       let handled = false;
       if (type === 'right') {
         // 色系条区域：调整色系范围
@@ -2620,11 +2649,11 @@ class sptmChart {
           }
         }
       }
-      if (handled) this.drawChart();
+      if (handled) this._scheduleDraw();
       return;
     }
 
-    let type=this.getMousePosition(event);
+    let type=this._getMousePosition(event);
     const zoomFactor = 1.1;
     
     if(type=="left"){
@@ -2686,7 +2715,7 @@ class sptmChart {
       }
     }
     
-    this.drawChart();
+    this._scheduleDraw();
   }
   
   /**
@@ -2820,7 +2849,7 @@ class sptmChart {
    * @param {*} event 
    * @returns 
    */
-  getMousePosition(events) {
+  _getMousePosition(events) {
     var event = window.event||events;
     const rect = this.canvas.getBoundingClientRect();
     const x = event.clientX - rect.left;
@@ -2857,7 +2886,7 @@ class sptmChart {
    */
   setOptions(options){
     let newoptions = deepMerge(this.options,options);
-    this.initOptions(newoptions);
+    this._initOptions(newoptions);
     // 同步瀑布图配置
     this._waterfall.applyConfig(this.options.waterfall);
   }
@@ -2883,7 +2912,7 @@ class sptmChart {
     // 合并新 chart_type 及额外配置
     const patchOptions = deepMerge({ chart_type: type }, extraOptions);
     const mergedOptions = deepMerge(this.options, patchOptions);
-    this.initOptions(mergedOptions);
+    this._initOptions(mergedOptions);
 
     // 同步瀑布图模块配置
     this._waterfall.applyConfig(this.options.waterfall);
@@ -2894,10 +2923,15 @@ class sptmChart {
     }
 
     // 重新绘制
-    this.drawChart();
+    this._draw();
   }
   
-
+  /*
+  * 获取类型
+  */
+  getChartType() {
+    return this.options.chart_type;
+  }
 
 
 
@@ -2963,11 +2997,11 @@ class sptmChart {
           }
         });
       }
-      this.draw();
+      this._scheduleDraw();
     });
-    
-    marker.onVisibleChanged(()=>this.draw());
-    marker.onMarkerPtChanged(()=>this.draw());
+
+    marker.onVisibleChanged(()=>this._scheduleDraw());
+    marker.onMarkerPtChanged(()=>this._scheduleDraw());
     
     this._markerList.set(id,marker);
     
@@ -2983,7 +3017,7 @@ class sptmChart {
       marker.setScutchonAnchor({x:centerX,y:centerY});
     }
     
-    this.draw();
+    this._draw();
     return id;
   }
 
@@ -3001,7 +3035,7 @@ class sptmChart {
         if(this._focusMarkerId===lastId){
           this._focusMarkerId=0;
         }
-        this.draw();
+        this._draw();
         return true;
       }
       return false;
@@ -3012,7 +3046,7 @@ class sptmChart {
     if(this._focusMarkerId===id){
       this._focusMarkerId=0;
     }
-    this.draw();
+    this._draw();
     return true;
   }
   
@@ -3026,7 +3060,7 @@ class sptmChart {
     const marker=this._markerList.get(id);
     if(!marker)return false;
     marker.setVisible(isShow);
-    this.draw();
+    this._draw();
     return true;
   }
   
@@ -3047,7 +3081,7 @@ class sptmChart {
     
     marker.setFocus(true);
     this._focusMarkerId=id;
-    this.draw();
+    this._draw();
     return true;
   }
   
@@ -3078,7 +3112,7 @@ class sptmChart {
     marker.setFrequency(freqHz);
     
     this._updateMarkerData(marker);
-    this.draw();
+    this._draw();
     return true;
   }
   
@@ -3128,7 +3162,7 @@ class sptmChart {
       colorGroup[colorKey]=color;
       marker.setColorGroup(colorGroup);
     }
-    this.draw();
+    this._draw();
     return true;
   }
   
@@ -3154,7 +3188,7 @@ class sptmChart {
     this._markerList.clear();
     this._focusMarkerId=0;
     this._nextMarkerId=1;
-    this.draw();
+    this._draw();
   }
   
     /**
@@ -3165,7 +3199,7 @@ class sptmChart {
     if(this.options.marker){
       this.options.marker.visible=visible;
     }
-    this.draw();
+    this._draw();
   }
   
   /**
@@ -3180,7 +3214,7 @@ class sptmChart {
     
     marker.setTraceId(traceId || 0);
     this._updateMarkerData(marker);
-    this.draw();
+    this._draw();
     return true;
   }
 
@@ -3220,7 +3254,7 @@ class sptmChart {
     }
     
     this._focusMarkerId = 0;
-    this.draw();
+    this._draw();
     return true;
   }
   
@@ -3340,7 +3374,7 @@ class sptmChart {
     if(this.options.centerinfo){
       this.options.centerinfo.visible = visible;
     }
-    this.draw();
+    this._draw();
   }
   
   /**
@@ -3359,7 +3393,7 @@ class sptmChart {
     if(this.options.centerinfo){
       this.options.centerinfo.position = position;
     }
-    this.draw();
+    this._draw();
   }
   
   /**
@@ -3372,7 +3406,7 @@ class sptmChart {
       this.options.centerinfo.offsetX = offsetX;
       this.options.centerinfo.offsetY = offsetY;
     }
-    this.draw();
+    this._draw();
   }
   
   /**
@@ -3383,7 +3417,7 @@ class sptmChart {
     if(this.options.centerinfo){
       this.options.centerinfo.background = color;
     }
-    this.draw();
+    this._draw();
   }
   
   /**
@@ -3394,7 +3428,7 @@ class sptmChart {
     if(this.options.centerinfo){
       this.options.centerinfo.text_color = color;
     }
-    this.draw();
+    this._draw();
   }
   
   /**
@@ -3405,7 +3439,7 @@ class sptmChart {
     if(this.options.centerinfo){
       this.options.centerinfo.font_size = size;
     }
-    this.draw();
+    this._draw();
   }
   
   /**
@@ -3428,11 +3462,95 @@ class sptmChart {
       }
 
     }
-    this.draw();
+    this._draw();
   }
 
+  /**
+   * 销毁插件实例，清理事件监听器、定时器和 DOM 元素，避免内存泄漏
+   * @public
+   */
+  destroy() {
+    // 1. 取消挂起的 requestAnimationFrame
+    this._cancelScheduledDraw();
 
+    // 2. 清理自动刷新定时器
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+      this.refreshInterval = null;
+    }
 
+    // 3. 清理选框定时器
+    if (this._selectionBox && this._selectionBox.timer) {
+      clearTimeout(this._selectionBox.timer);
+      this._selectionBox.timer = null;
+    }
+
+    // 4. 清理 resize debounce 定时器
+    if (this._resizeTimer) {
+      clearTimeout(this._resizeTimer);
+      this._resizeTimer = null;
+    }
+
+    // 5. 移除 canvas 事件监听器
+    if (this.canvas) {
+      this.canvas.removeEventListener('mousedown', this._boundHandleMousedown);
+      this.canvas.removeEventListener('mouseup', this._boundHandleMouseup);
+      this.canvas.removeEventListener('mousemove', this._boundHandleMousemove);
+      this.canvas.removeEventListener('mouseout', this._boundHandleMouseout);
+      this.canvas.removeEventListener('wheel', this.wheelListener);
+      this.canvas.removeEventListener('dblclick', this._boundHandleDblClick);
+      this.canvas.removeEventListener('click', this._boundHandleClick);
+      this.canvas.removeEventListener('contextmenu', this._boundHandleContextMenu);
+    }
+
+    // 6. 移除 window 事件监听器
+    window.removeEventListener('keydown', this._boundHandleKeydown);
+    window.removeEventListener('keyup', this._boundHandleKeyup);
+    window.removeEventListener('resize', this._boundResizeHandler);
+
+    // 7. 移除 thresholdDiv 事件监听器
+    if (this.thresholdDiv) {
+      this.thresholdDiv.removeEventListener('mousedown', this._boundHandleThresholdMousedown);
+      this.thresholdDiv.removeEventListener('mousemove', this._boundHandleThresholdMousemove);
+      this.thresholdDiv.removeEventListener('mouseout', this._boundHandleThresholdMouseout);
+      this.thresholdDiv.removeEventListener('mouseup', this._boundHandleThresholdMouseout);
+      this.thresholdDiv.remove();
+      this.thresholdDiv = null;
+    }
+
+    // 8. 移除 freqTip DOM 元素
+    if (this.fretipDiv) {
+      this.fretipDiv.remove();
+      this.fretipDiv = null;
+    }
+
+    // 9. 移除 canvas 和容器
+    if (this.canvas) {
+      this.canvas.remove();
+      this.canvas = null;
+    }
+
+    // 10. 清空 Marker 列表
+    if (this._markerList) {
+      this._markerList.clear();
+      this._markerList = null;
+    }
+
+    // 11. 清理 waterfall 模块
+    if (this._waterfall) {
+      this._waterfall.clear?.();
+      this._waterfall = null;
+    }
+
+    // 12. 断开对 box 的引用
+    if (this.box) {
+      this.box.innerHTML = '';
+      this.box = null;
+    }
+
+    // 13. 释放上下文引用
+    this.ctx = null;
+  }
 
 }
 

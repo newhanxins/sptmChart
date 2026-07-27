@@ -204,11 +204,183 @@ function truncateNumber(num, decimalPlaces,isnum=false) {
 
 
 
+/**
+ * 计算源数据在目标长度下的索引位置
+ * @param {number} dataLen 源数据长度
+ * @param {number} targetIndex 目标索引值
+ * @param {number} targetLen 目标长度
+ * @returns {number} 对应的源数据索引
+ */
+function selectDataIndex(dataLen, targetIndex, targetLen) {
+  if (targetIndex >= dataLen || dataLen == 0 || targetLen == 0) return 0;
+  if (targetLen == 1) return Math.floor(dataLen / 2);
+  if (targetLen == dataLen) return targetIndex;
+  if (dataLen > targetLen) {
+    return Math.floor((targetIndex + 1) * dataLen / targetLen) - 1;
+  } else {
+    return Math.floor(targetIndex * dataLen / targetLen);
+  }
+}
+
+/**
+ * 保留最大最小方式抽点（第一版）
+ * @param {Array} data 源数据
+ * @param {number} dataLen 源数据长度
+ * @param {number} targetLen 目标长度
+ * @returns {{targetData: Array, dataIndex: Array}}
+ */
+function extractTwoPolesTraceLine(data, dataLen, targetLen) {
+  let targetData = [];
+  let dataIndex = [];
+  let targetCout = 0;
+  let selectIndex = selectDataIndex(dataLen, targetCout, targetLen);
+  let isMaxSelected = false;
+  let maxValue = 0, minValue = 0;
+  let maxIndex = -1, minIndex = -1;
+
+  for (let j = 0; j < dataLen; j++) {
+    if (isMaxSelected) {
+      if (data[j] > maxValue) {
+        maxValue = data[j];
+        maxIndex = j;
+      }
+      if (data[j] < minValue) {
+        minValue = data[j];
+        minIndex = j;
+      }
+    } else {
+      maxValue = data[j];
+      minValue = data[j];
+      maxIndex = j;
+      minIndex = j;
+      isMaxSelected = true;
+    }
+
+    if (selectIndex == j) {
+      targetData[targetCout] = [maxValue, minValue];
+      dataIndex[targetCout] = [maxIndex, minIndex];
+      targetCout++;
+      isMaxSelected = false;
+      selectIndex = selectDataIndex(dataLen, targetCout, targetLen);
+    }
+  }
+  return { targetData, dataIndex };
+}
+
+/**
+ * 保留最大最小方式抽点（第二版，性能优化）
+ * @param {Array} data 源数据
+ * @param {number} dataLen 源数据长度
+ * @param {number} targetLen 目标长度
+ * @returns {{targetData: Array, dataIndex: Array}}
+ */
+function extractTwoPolesTraceLine2(data, dataLen, targetLen) {
+  // 预分配结果数组和配对数组，避免动态扩容和热循环中频繁创建小数组对象
+  const targetData = new Array(targetLen);
+  const dataIndex = new Array(targetLen);
+  for (let i = 0; i < targetLen; i++) {
+    targetData[i] = [0, 0];
+    dataIndex[i] = [0, 0];
+  }
+
+  // 预计算所有分割点索引（内联 selectDataIndex 逻辑，避免热循环中的函数调用开销）
+  // 调用方保证 dataLen > targetLen，使用公式：floor((i+1)*dataLen/targetLen)-1
+  const selectIndices = new Uint32Array(targetLen);
+  for (let i = 0; i < targetLen; i++) {
+    selectIndices[i] = Math.floor((i + 1) * dataLen / targetLen) - 1;
+  }
+
+  let targetCout = 0;
+  let isMaxSelected = false;
+  let maxValue = 0, minValue = 0;
+  let maxIndex = -1, minIndex = -1;
+  let selectIndex = selectIndices[0];
+  const d = data; // 局部引用，帮助 JIT 优化
+
+  for (let j = 0; j < dataLen; j++) {
+    const val = d[j];
+    if (isMaxSelected) {
+      if (val > maxValue) {
+        maxValue = val;
+        maxIndex = j;
+      } else if (val < minValue) {
+        minValue = val;
+        minIndex = j;
+      }
+    } else {
+      maxValue = val;
+      minValue = val;
+      maxIndex = j;
+      minIndex = j;
+      isMaxSelected = true;
+    }
+
+    if (j === selectIndex) {
+      const pair = targetData[targetCout];
+      pair[0] = maxValue;
+      pair[1] = minValue;
+
+      const idxPair = dataIndex[targetCout];
+      idxPair[0] = maxIndex;
+      idxPair[1] = minIndex;
+
+      targetCout++;
+      isMaxSelected = false;
+      if (targetCout < targetLen) {
+        selectIndex = selectIndices[targetCout];
+      }
+    }
+  }
+  return { targetData, dataIndex };
+}
+
+/**
+ * 防抖函数（debounce）
+ * 延迟执行，如果在等待时间内再次触发，则重新计时
+ * 适合：resize、input 等事件
+ * @param {Function} fn 要执行的函数
+ * @param {number} wait 等待时间（毫秒）
+ * @returns {Function} 防抖后的函数
+ */
+function debounce(fn, wait = 200) {
+  let timer = null;
+  return function (...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      fn.apply(this, args);
+    }, wait);
+  };
+}
+
+/**
+ * 节流函数（throttle）
+ * 在固定时间间隔内只执行一次
+ * 适合：scroll、mousemove 等高频事件
+ * @param {Function} fn 要执行的函数
+ * @param {number} wait 等待时间（毫秒）
+ * @returns {Function} 节流后的函数
+ */
+function throttle(fn, wait = 100) {
+  let lastTime = 0;
+  return function (...args) {
+    const now = Date.now();
+    if (now - lastTime >= wait) {
+      lastTime = now;
+      fn.apply(this, args);
+    }
+  };
+}
+
 export {
   deepMerge,
   deepCopy,
   getDevicePixelRatio,
   calculateStepValues,
   calculateWidths,
-  truncateNumber
+  truncateNumber,
+  selectDataIndex,
+  extractTwoPolesTraceLine,
+  extractTwoPolesTraceLine2,
+  debounce,
+  throttle
 }
