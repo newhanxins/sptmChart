@@ -8,6 +8,15 @@
 }
 #mycanvas{
   border: 1px solid #ddd;
+  touch-action: none;
+}
+
+/* 频谱图表画布触控支持 */
+.sptmchart canvas{
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /*门限图标样式*/

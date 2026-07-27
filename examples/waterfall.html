@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>sptmChart 瀑布图测试</title>
+  <link rel="stylesheet" href="../dist/sptmChart.css">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    header {
+      background: #16213e;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      border-bottom: 1px solid #0f3460;
+      flex-shrink: 0;
+    }
+    header h1 { font-size: 16px; color: #00d4ff; }
+    header span { font-size: 12px; color: #aaa; }
+    #chart-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    #waterfall-canvas {
+      width: 100%;
+      height: 100%;
+    }
+    #controls {
+      background: #16213e;
+      padding: 12px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      border-top: 1px solid #0f3460;
+      flex-shrink: 0;
+    }
+    #controls label { font-size: 12px; color: #aaa; }
+    #controls input[type="range"] {
+      width: 120px;
+      accent-color: #00d4ff;
+    }
+    #controls input[type="number"] {
+      width: 70px;
+      padding: 2px 6px;
+      background: #0f3460;
+      border: 1px solid #00d4ff;
+      color: #00d4ff;
+      border-radius: 3px;
+      font-size: 12px;
+    }
+    #controls button {
+      padding: 4px 14px;
+      background: #0f3460;
+      border: 1px solid #00d4ff;
+      color: #00d4ff;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: background 0.2s;
+    }
+    #controls button:hover { background: #1a4f8a; }
+    #controls button.active { background: #00d4ff; color: #000; font-weight: bold; }
+    #info {
+      font-size: 11px;
+      color: #888;
+      padding: 6px 20px;
+      background: #0d0d1a;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>瀑布图测试</h1>
+    <span>chart_type: waterfall | 色系: jet | 每秒推送约50帧</span>
+  </header>
+
+  <div id="chart-container">
+    <div id="waterfall-canvas"></div>
+  </div>
+
+  <div id="info">
+    提示：滚轮在网格区域 → 调整行高缩放 | Y轴区域 → 调整时间刻度间隔 | 色系条区域上半 → 调最大值，下半 → 调最小值 | 在网格区域长按或拖动鼠标可框选频率范围
+  </div>
+  <div id="selection-info" style="display:none; background:#0d0d1a; color:#00d4ff; padding:8px 20px; font-size:12px; border-top:1px solid #0f3460;">
+    选框结果：开始频率=<span id="sel-start">--</span> MHz | 结束频率=<span id="sel-end">--</span> MHz | 中心频率=<span id="sel-center">--</span> MHz | 显宽=<span id="sel-span">--</span> MHz
+  </div>
+
+  <div id="controls">
+    <label>色系最大:</label>
+    <input type="number" id="colorMax" value="10" step="1">
+    <label>色系最小:</label>
+    <input type="number" id="colorMin" value="-80" step="1">
+    <button id="btnApplyRange">应用色系</button>
+
+    <span style="width:1px;height:20px;background:#333;margin:0 6px;"></span>
+
+    <label>时间间隔(秒):</label>
+    <input type="range" id="timeInterval" min="1" max="60" value="1" step="1">
+    <span id="timeIntervalVal" style="font-size:12px;color:#00d4ff;width:20px;">1</span>
+    <button id="btnApplyInterval">应用</button>
+
+    <span style="width:1px;height:20px;background:#333;margin:0 6px;"></span>
+
+    <label>行缩放:</label>
+    <input type="range" id="rowScale" min="1" max="20" value="10" step="1">
+    <span id="rowScaleVal" style="font-size:12px;color:#00d4ff;width:40px;">1.0x</span>
+
+    <span style="width:1px;height:20px;background:#333;margin:0 6px;"></span>
+
+    <button id="btnClear">清空数据</button>
+    <button id="btnPause">暂停推送</button>
+    <button id="btnImageData" class="active">ImageData: ON</button>
+
+    <span style="width:1px;height:20px;background:#333;margin:0 6px;"></span>
+
+    <button id="btnMode" class="active">瀑布图模式</button>
+    <button id="btnRowHeightMode">行高模式: fill</button>
+
+    <span style="width:1px;height:20px;background:#333;margin:0 6px;"></span>
+
+    <button id="btnFFT" class="active">FFT</button>
+    <button id="btnDScan">DScan</button>
+    <button id="btnMultiSeg">多段: OFF</button>
+  </div>
+
+  <script src="../dist/sptmChart.js?v=2"></script>
+  <script>
+    // =============================================
+    // 全局状态
+    // =============================================
+
+    const {sptmChart,MarkerItem} = window.sptmChart;
+    
+    let chart = null;
+    let pushInterval = null;
+    let isPaused = false;
+    let useImageData = true;
+    let frameCount = 0;
+    let startTime = Date.now();
+    let peakFreq = 1600000000; // 峰值频率初始位置（Hz）
+    let isWaterfallMode = true; // 当前模式：true=瀑布图，false=折线图
+    let rowHeightMode = 'fill'; // 行高模式：'fill'=动态铺满，'time'=固定px/s
+    let currentSpectrumMode = 'FFT'; // 当前谱型：'FFT' | 'DScan'
+    let processFirstOnly = true; // 是否只处理第一段数据
+
+    // 瀑布图配置
+    const wfOptions = {
+      chart_type: 'waterfall',
+      duration: 0, // 手动模式，不自动重绘
+      width: '100%',
+      height: '100%',
+      background: '#0d0d1a',
+      center_freq: 1600000000,
+      span: 800000000,
+      type: 'FFT',
+      grid: {
+        left: 60,
+        top: 40,
+        bottom: 50,
+        right: 70,        // 色系条宽度
+        background: '#000',
+        color: '#333',
+        width: 1,
+        xgrid_show: false,
+        ygrid_show: false,
+      },
+      xaxis: {
+        number: 5,
+        unit: 'MHz',
+        decimals: 2,
+        color: '#555',
+        text_color: '#888',
+        text_font_size: 10,
+        text_font_family: 'Arial',
+      },
+      yaxis: {
+        number: 5,// 时间轴刻度数量
+        text_color: '#888',
+        text_font_size: 10,
+        text_font_family: 'Arial',
+        color: '#555',
+        unit: 'dBμV',
+        decimals: 1,
+      },
+      // 瀑布图专有配置
+      waterfall: {
+        max_rows: 200,
+        time_interval: 1,
+        time_interval_min: 1,
+        time_interval_max: 60,
+        color_min: -80,
+        color_max: 10,
+        color_min_limit: -120,  // 色系最小值下限
+        color_max_limit: 60,   // 色系最大值上限
+        draggable: false,
+        color_wheel_enabled: true,
+        time_wheel_enabled: true,
+        use_image_data: true,
+        process_first_only: true,  // 只处理第一条数据（向后兼容）
+        time_axis_visible: true,   // 显示 Y 轴时间标线和标签
+        time_format: 'mm:ss',      // 时间格式
+        time_label_interval: 1,    // 时间标签显示间隔（秒）
+      },
+      // 选框功能配置
+      selectionBox: {
+        enabled: true,                       // 是否启用选框
+        fillStyle: 'rgba(0, 212, 255, 0.15)', // 选框填充色
+        strokeStyle: '#00d4ff',              // 选框边框色
+        lineWidth: 1,                        // 选框边框宽度
+        minWidth: 5,                         // 触发选框的最小宽度（像素）
+        longPressDelay: 300,                 // 长按触发选框的延迟（毫秒）
+        onSelect: function(data) {           // 选框结束回调
+          document.getElementById('sel-start').textContent = (data.startFreq / 1000000).toFixed(6);
+          document.getElementById('sel-end').textContent = (data.endFreq / 1000000).toFixed(6);
+          document.getElementById('sel-center').textContent = (data.centerFreq / 1000000).toFixed(6);
+          document.getElementById('sel-span').textContent = (data.span / 1000000).toFixed(6);
+          document.getElementById('selection-info').style.display = 'block';
+          console.log('选框结果:', data);
+        }
+      }
+    };
+
+    // =============================================
+    // FFT / DScan 配置
+    // =============================================
+    const fftConfig = {
+      type: 'FFT',
+      center_freq: 1600000000,
+      span: 800000000,
+      xaxis: {
+        unit: 'MHz',
+        decimals: 2,
+        dscan_freq: []
+      }
+    };
+
+    const dscanConfig = {
+      type: 'DScan',
+      center_freq: '',
+      span: '',
+      xaxis: {
+        unit: 'MHz',
+        decimals: 2,
+        dscan_freq: [
+          { start_freq: 1200000000, end_freq: 1600000000, width: 1 },
+          { start_freq: 1700000000, end_freq: 2000000000, width: 1 }
+        ],
+        dscan_space: 10
+      }
+    };
+
+    // =============================================
+    // 初始化图表
+    // =============================================
+    function initChart() {
+      chart = new sptmChart('waterfall-canvas', wfOptions);
+      // 添加初始谱线
+      chart.addTrace({
+        id: 1,
+        type: currentSpectrumMode,
+        visible: true,
+        name: 'Trace1',
+        color: 'green',
+        width: 1,
+        datainfo: []
+      });
+      chart.drawChart();
+    }
+
+    // =============================================
+    // 模拟瀑布图数据生成
+    // =============================================
+
+    /**
+     * 生成一段频谱数据
+     * @param {number} point 点数
+     * @param {number} startFreq 起始频率(Hz)
+     * @param {number} endFreq 结束频率(Hz)
+     * @returns {Array} 数据数组
+     */
+    function generateSpectrumData(point, startFreq, endFreq) {
+      const step = (endFreq - startFreq) / point;
+      const data = new Array(point);
+      for (let i = 0; i < point; i++) {
+        const freq = startFreq + i * step;
+        let value = -80;
+
+        // 固定峰值信号（峰值频率缓慢漂移）
+        peakFreq += (Math.random() - 0.5) * 100000;
+        if (peakFreq < startFreq) peakFreq = startFreq;
+        if (peakFreq > endFreq) peakFreq = endFreq;
+        const distFromPeak = Math.abs(freq - peakFreq);
+        if (distFromPeak < 5000000) {
+          value += 80 * Math.exp(-((distFromPeak / 2000000) ** 2));
+        }
+
+        // 第二个次峰值
+        const peak2 = startFreq + (endFreq - startFreq) * 0.3 + Math.sin(frameCount * 0.05) * 50000000;
+        const dist2 = Math.abs(freq - peak2);
+        if (dist2 < 8000000) {
+          value += 50 * Math.exp(-((dist2 / 3000000) ** 2));
+        }
+
+        // 随机脉冲噪声
+        if (Math.random() < 0.002) {
+          value += (Math.random() * 30 - 5);
+        }
+
+        // 加随机噪声
+        value += (Math.random() - 0.5) * 8;
+
+        // 限制范围
+        value = Math.max(-90, Math.min(80, value));
+        data[i] = value;
+      }
+      return data;
+    }
+
+    /**
+     * 生成 FFT 模式单段瀑布图数据
+     * @returns {Array} datainfo 数组（单段）
+     */
+    function generateFrameFFT() {
+      const point = 512;
+      const startFreq = 1200000000;
+      const endFreq = 2000000000;
+      const data = generateSpectrumData(point, startFreq, endFreq);
+      const now = Date.now();
+      return [{
+        point: point,
+        start_freq: startFreq,
+        end_freq: endFreq,
+        width: 1,
+        data: data,
+        time: now
+      }];
+    }
+
+    /**
+     * 生成 DScan 模式多段瀑布图数据
+     * @returns {Array} datainfo 数组（两段）
+     */
+    function generateFrameDScan() {
+      const now = Date.now();
+      // 第一段频率
+      const point1 = 512;
+      const startFreq1 = 1200000000;
+      const endFreq1 = 1600000000;
+      const data1 = generateSpectrumData(point1, startFreq1, endFreq1);
+
+      // 第二段频率
+      const point2 = 512;
+      const startFreq2 = 1700000000;
+      const endFreq2 = 2000000000;
+      const data2 = generateSpectrumData(point2, startFreq2, endFreq2);
+
+      return [
+        {
+          point: point1,
+          start_freq: startFreq1,
+          end_freq: endFreq1,
+          width: 1,
+          data: data1,
+          time: now
+        },
+        {
+          point: point2,
+          start_freq: startFreq2,
+          end_freq: endFreq2,
+          width: 1,
+          data: data2,
+          time: now
+        }
+      ];
+    }
+
+    // =============================================
+    // 推送数据
+    // =============================================
+    function pushData() {
+      if (isPaused) return;
+      const frames = currentSpectrumMode === 'FFT' ? generateFrameFFT() : generateFrameDScan();
+      chart.setTraceData(1, frames);
+      frameCount++;
+      updateHeaderInfo();
+    }
+
+    /**
+     * 更新顶部信息栏
+     */
+    function updateHeaderInfo() {
+      const elapsed = (Date.now() - startTime) / 1000;
+      const fps = elapsed > 0 ? (frameCount / elapsed).toFixed(1) : '0.0';
+      const segInfo = currentSpectrumMode === 'DScan' ? ' | 多段: ' + (processFirstOnly ? 'OFF' : 'ON') : '';
+      document.querySelector('header span').textContent =
+        `chart_type: waterfall | 谱型: ${currentSpectrumMode}${segInfo} | FPS: ${fps} | 帧数: ${frameCount} | 色系: [${wfOptions.waterfall.color_min}, ${wfOptions.waterfall.color_max}]`;
+    }
+
+    function startPush() {
+      if (pushInterval) clearInterval(pushInterval);
+      // 约 20ms 推送一次（约 50 fps）
+      pushInterval = setInterval(pushData, 20);
+    }
+
+    // =============================================
+    // 控件交互
+    // =============================================
+
+    function applyColorRange() {
+      const min = parseFloat(document.getElementById('colorMin').value) || -30;
+      const max = parseFloat(document.getElementById('colorMax').value) || 60;
+      chart.setWaterfallColorRange(min, max);
+      wfOptions.waterfall.color_min = min;
+      wfOptions.waterfall.color_max = max;
+    }
+
+    function applyTimeInterval() {
+      const interval = parseInt(document.getElementById('timeInterval').value) || 5;
+      wfOptions.waterfall.time_interval = interval;
+      chart.setOptions({ waterfall: wfOptions.waterfall });
+    }
+
+    function clearData() {
+      chart.clearWaterfallData();
+      frameCount = 0;
+      startTime = Date.now();
+      peakFreq = 1600000000;
+    }
+
+    function togglePause() {
+      isPaused = !isPaused;
+      document.getElementById('btnPause').textContent = isPaused ? '恢复推送' : '暂停推送';
+      document.getElementById('btnPause').classList.toggle('active', isPaused);
+    }
+
+    function toggleRowHeightMode() {
+      rowHeightMode = rowHeightMode === 'fill' ? 'time' : 'fill';
+      document.getElementById('btnRowHeightMode').textContent = '行高模式: ' + rowHeightMode;
+      document.getElementById('btnRowHeightMode').classList.toggle('active', rowHeightMode === 'time');
+      // 调用图表的设置方法
+      if (chart && chart.setWaterfallRowHeightMode) {
+        chart.setWaterfallRowHeightMode(rowHeightMode);
+        chart.drawChart();
+      }
+    }
+
+    /**
+     * 切换 FFT / DScan 谱型模式
+     * @param {string} mode 'FFT' | 'DScan'
+     */
+    function switchSpectrumMode(mode) {
+      if (currentSpectrumMode === mode) return;
+      currentSpectrumMode = mode;
+
+      // 更新按钮状态
+      document.getElementById('btnFFT').classList.toggle('active', mode === 'FFT');
+      document.getElementById('btnDScan').classList.toggle('active', mode === 'DScan');
+
+      // 清空瀑布图数据
+      chart.clearWaterfallData();
+      frameCount = 0;
+      startTime = Date.now();
+
+      // 使用 setOptions 切换配置
+      const config = mode === 'FFT' ? fftConfig : dscanConfig;
+      chart.setOptions(config);
+
+      // DScan 模式默认开启多段数据处理
+      if (mode === 'DScan' && processFirstOnly) {
+        toggleMultiSeg(true);
+      }
+
+      // 重新绘制
+      chart.drawChart();
+      updateHeaderInfo();
+    }
+
+    /**
+     * 切换多段数据处理开关
+     * @param {boolean} [forceState] 强制设置状态
+     */
+    function toggleMultiSeg(forceState) {
+      if (typeof forceState === 'boolean') {
+        processFirstOnly = !forceState;
+      } else {
+        processFirstOnly = !processFirstOnly;
+      }
+      const btn = document.getElementById('btnMultiSeg');
+      btn.textContent = processFirstOnly ? '多段: OFF' : '多段: ON';
+      btn.classList.toggle('active', !processFirstOnly);
+      wfOptions.waterfall.process_first_only = processFirstOnly;
+      chart.setOptions({ waterfall: { process_first_only: processFirstOnly } });
+      updateHeaderInfo();
+    }
+
+    function toggleImageData() {
+      useImageData = !useImageData;
+      wfOptions.waterfall.use_image_data = useImageData;
+      chart.setOptions({ waterfall: wfOptions.waterfall });
+      document.getElementById('btnImageData').textContent = `ImageData: ${useImageData ? 'ON' : 'OFF'}`;
+      document.getElementById('btnImageData').classList.toggle('active', useImageData);
+    }
+
+    // Line 模式的配置
+    const lineOptions = {
+      chart_type: 'line',
+      duration: 0,
+      width: '100%',
+      height: '100%',
+      background: 'rgba(0,0,0,0.2)',
+      center_freq: 1600000000,
+      span: 800000000,
+      type: 'FFT',
+      grid: {
+        left: 60,
+        top: 40,
+        bottom: 50,
+        right: 70,
+        background: 'rgba(0,0,0,0.2)',
+        color: '#333',
+        width: 1,
+        xgrid_show: true,
+        ygrid_show: true,
+      },
+      xaxis: {
+        number: 5,
+        unit: 'MHz',
+        decimals: 2,
+        color: '#555',
+        text_color: '#888',
+        text_font_size: 10,
+        text_font_family: 'Arial',
+      },
+      yaxis: {
+        number: 5,
+        text_color: '#888',
+        text_font_size: 10,
+        text_font_family: 'Arial',
+        color: '#555',
+        unit: 'dBμV',
+        decimals: 1,
+        "min_value": -80,
+          "max_value": 20,
+          "floor_value": -80,
+          "ceiling_value": 200,
+      },
+      // 选框功能配置（与瀑布图模式保持一致）
+      selectionBox: {
+        enabled: true,                       // 是否启用选框
+        fillStyle: 'rgba(0, 212, 255, 0.15)', // 选框填充色
+        strokeStyle: '#00d4ff',              // 选框边框色
+        lineWidth: 1,                        // 选框边框宽度
+        minWidth: 5,                         // 触发选框的最小宽度（像素）
+        longPressDelay: 300,                 // 长按触发选框的延迟（毫秒）
+        onSelect: function(data) {           // 选框结束回调
+          document.getElementById('sel-start').textContent = (data.startFreq / 1000000).toFixed(6);
+          document.getElementById('sel-end').textContent = (data.endFreq / 1000000).toFixed(6);
+          document.getElementById('sel-center').textContent = (data.centerFreq / 1000000).toFixed(6);
+          document.getElementById('sel-span').textContent = (data.span / 1000000).toFixed(6);
+          document.getElementById('selection-info').style.display = 'block';
+          console.log('线模式选框结果:', data);
+        }
+      }
+    };
+
+    function toggleMode() {
+      isWaterfallMode = !isWaterfallMode;
+      const btn = document.getElementById('btnMode');
+      if (isWaterfallMode) {
+        // 切换到瀑布图模式
+        btn.textContent = '瀑布图模式';
+        btn.classList.add('active');
+        // 停止推送并重新初始化为瀑布图
+        if (pushInterval) {
+          clearInterval(pushInterval);
+          pushInterval = null;
+        }
+        initChart();
+        startPush();
+      } else {
+        // 切换到折线图模式
+        btn.textContent = '折线图模式';
+        btn.classList.remove('active');
+        // 停止推送并重新初始化为折线图
+        if (pushInterval) {
+          clearInterval(pushInterval);
+          pushInterval = null;
+        }
+        chart = new sptmChart('waterfall-canvas', lineOptions);
+        chart.addTrace({ id: 1 });
+        chart.drawChart();
+        // 折线图模式也启动推送
+        startPushLine();
+      }
+      frameCount = 0;
+      startTime = Date.now();
+    }
+
+    // 折线图模式推送数据（使用 datainfo 格式）
+    function startPushLine() {
+      if (pushInterval) clearInterval(pushInterval);
+      pushInterval = setInterval(function() {
+        if (isPaused) return;
+        const datainfo = generateDatainfoForLine();
+        chart.setTraceData(1, datainfo);
+        frameCount++;
+      }, 20);
+    }
+
+    // 生成折线图数据（datainfo 格式）
+    function generateDatainfoForLine() {
+      const point = 512;
+      const startFreq = 1200000000;
+      const endFreq = 2000000000;
+      const step = (endFreq - startFreq) / point;
+
+      const data = new Array(point);
+      for (let i = 0; i < point; i++) {
+        const freq = startFreq + i * step;
+        let value = -80;
+
+        // 峰值信号
+        peakFreq += (Math.random() - 0.5) * 100000;
+        if (peakFreq < startFreq) peakFreq = startFreq;
+        if (peakFreq > endFreq) peakFreq = endFreq;
+        const distFromPeak = Math.abs(freq - peakFreq);
+        if (distFromPeak < 5000000) {
+          value += 80 * Math.exp(-((distFromPeak / 2000000) ** 2));
+        }
+
+        // 随机噪声
+        value += (Math.random() - 0.5) * 8;
+        value = Math.max(-90, Math.min(80, value));
+        data[i] = value;
+      }
+
+      // 返回 datainfo 格式（与 index.html 一致）
+      return [
+        {
+          point: point,
+          step: step,
+          start_freq: startFreq,
+          end_freq: endFreq,
+          width: 1,
+          data: data
+        }
+      ];
+    }
+
+    // 时间间隔滑块
+    document.getElementById('timeInterval').addEventListener('input', function() {
+      document.getElementById('timeIntervalVal').textContent = this.value;
+    });
+    document.getElementById('timeInterval').addEventListener('change', function() {
+      applyTimeInterval();
+    });
+
+    // 行缩放滑块（通过修改 _rowScale 内部值，这里用 options 同步）
+    document.getElementById('rowScale').addEventListener('input', function() {
+      const scale = parseFloat(this.value) / 10;
+      document.getElementById('rowScaleVal').textContent = scale.toFixed(1) + 'x';
+      // 瀑布图内部通过 setOptions 的方式无法直接修改 _rowScale
+      // 这里我们直接访问内部实例
+      if (chart._waterfall) {
+        chart._waterfall._rowScale = scale;
+        chart.drawChart();
+      }
+    });
+
+    // =============================================
+    // 启动
+    // =============================================
+    document.addEventListener('DOMContentLoaded', function() {
+      initChart();
+      startPush();
+      document.getElementById('btnPause').addEventListener('click', togglePause);
+      document.getElementById('btnClear').addEventListener('click', clearData);
+      document.getElementById('btnImageData').addEventListener('click', toggleImageData);
+      document.getElementById('btnMode').addEventListener('click', toggleMode);
+      document.getElementById('btnApplyRange').addEventListener('click', applyColorRange);
+      document.getElementById('btnApplyInterval').addEventListener('click', applyTimeInterval);
+      document.getElementById('btnRowHeightMode').addEventListener('click', toggleRowHeightMode);
+      document.getElementById('btnFFT').addEventListener('click', function() { switchSpectrumMode('FFT'); });
+      document.getElementById('btnDScan').addEventListener('click', function() { switchSpectrumMode('DScan'); });
+      document.getElementById('btnMultiSeg').addEventListener('click', function() { toggleMultiSeg(); });
+      document.getElementById('colorMin').addEventListener('input', applyColorRange);
+      document.getElementById('colorMax').addEventListener('input', applyColorRange);
+    })
+    
+  </script>
+</body>
+</html>

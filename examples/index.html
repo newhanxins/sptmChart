@@ -196,9 +196,19 @@
           "icon_url": "../images/threshold_slider.png",
           "drag_icon_url": "../images/threshold_slider_drag.png"
         },
-        "contextMenu": {  // 右键菜单配置
-          "enabled": true,  // 启用右键菜单
-          "actions": ["exitFocus"]  // 右键动作：退出焦点
+        "contextMenu": { // 右键菜单配置
+          enabled: true, //是否启用右键菜单
+          actions: ["getPosition"], // 右键动作：["exitFocus"]  退出焦点
+          onGetPosition: (positionInfo, event) => {
+            console.log("获取位置信息", positionInfo);
+          },
+        },
+        "selectionBox": {
+          enabled: true,
+          onSelect: (positionInfo, event) => {
+            // 处理选择框数据
+            console.log("获取选择框数据", positionInfo);
+          },
         },
         "level_tipline": {
           "visible": true,

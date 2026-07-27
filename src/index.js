@@ -24,6 +24,13 @@ class sptmChart {
     this.setCanvasSize();
     this.refreshInterval=null;
     this.isDraw=true
+    //移动端触控支持
+    this._isTouchActive=false;      // 标记当前是touch交互，屏蔽mouse事件重复触发
+    this._touchStartTime=0;         // touch开始时间（用于长按检测）
+    this._longPressTimer=null;      // 长按定时器
+    this._lastTouchDist=0;          // 双指缩放时的上次距离
+    this._touchStartPos={x:0,y:0}; // 触控起始位置
+    this._longPressTriggered=false; // 长按是否已触发
     //门限信息
     this.thresholdDiv=null;
     this.thresholdFouce=false;
@@ -40,6 +47,13 @@ class sptmChart {
       lastX:0,
       lastY:0
     };
+    
+    //========== 交互状态机 ==========
+    this._currentOperation=null;       // 当前操作类型 'markerDrag'|'selectionBox'|'pan'|'thresholdDrag'|null
+    this._mouseDownPos={x:0,y:0};      // mousedown位置
+    this._mouseDownTime=0;             // mousedown时间
+    this._dragThreshold=5;             // 拖动判定阈值（像素）
+    //=====================================
 
     // 瀑布图模块初始化
     this._waterfall = new Waterfall(this);
@@ -94,6 +108,15 @@ class sptmChart {
     window.addEventListener('keyup', this._boundHandleKeyup);
     // 监听窗口调整大小（添加 debounce，避免拖拽窗口时频繁重绘）
     window.addEventListener('resize', this._boundResizeHandler);
+    // 移动端触控事件绑定（passive: false 以允许 preventDefault）
+    this._boundHandleTouchStart = this._handleTouchStart.bind(this);
+    this._boundHandleTouchMove = this._handleTouchMove.bind(this);
+    this._boundHandleTouchEnd = this._handleTouchEnd.bind(this);
+    this._boundHandleTouchCancel = this._handleTouchCancel.bind(this);
+    this.canvas.addEventListener('touchstart', this._boundHandleTouchStart, { passive: false });
+    this.canvas.addEventListener('touchmove', this._boundHandleTouchMove, { passive: false });
+    this.canvas.addEventListener('touchend', this._boundHandleTouchEnd, { passive: false });
+    this.canvas.addEventListener('touchcancel', this._boundHandleTouchCancel, { passive: false });
     //鼠标按下事件
     this.mousedownInfo={
       isMouseDown:false,
@@ -746,16 +769,16 @@ class sptmChart {
         "crossLine": false,//是否显示十字线
         "scutchonVisible": true,//是否显示标牌
         "colorGroup":{//颜色配置
-          "activeForeground": "#239ee7",
-          "inactiveForeground": "#535353",
-          "noFocusBackground": "#bfbfbf",
-          "focusBackground": "#ff9800",
-          "crossBorderText": "#ff0000",
-          "lineColor": "#9e9e9e",
-          "scutchonBackground": "rgba(49, 52, 69, 0.9)",
-          "scutchonForeground": "#ffffff"
+          "activeForeground": "#239ee7",//Marker激活时前景色
+          "inactiveForeground": "#535353",//Marker非激活时前景色
+          "noFocusBackground": "#bfbfbf",//Marker未获得焦点时背景色
+          "focusBackground": "#ff9800",//Marker获得焦点时背景色
+          "crossBorderText": "#ff0000",//Marker边界文字颜色
+          "lineColor": "#9e9e9e",//Marker线条颜色
+          "scutchonBackground": "rgba(49, 52, 69, 0.9)",//标牌背景色
+          "scutchonForeground": "#ffffff"//标牌文字颜色
         },
-        "clickBlankToExit": false  // 点击空白区域退出焦点
+        "clickBlankToExit": true  // 点击空白区域退出焦点
       },
       "contextMenu":{ //全局右键菜单配置 - 新增
         "enabled": true,//是否启用右键菜单
@@ -843,6 +866,11 @@ class sptmChart {
           "pointx": 0,//鼠标所在 x 轴坐标
           "pointy": 0,//鼠标所在 y 轴坐标
         },
+        "tip_background": "rgba(0, 0, 0, 0.7)",//提示框背景色
+        "tip_text_color": "#ffffff",//提示框文本颜色
+        "tip_font_size": 12,//提示框字体大小
+        "tip_padding": 8,//提示框内边距
+        "tip_border_radius": 4,//提示框圆角半径
       },
       // 图表绘制类型：'line'（默认，传统线图）| 'waterfall'（瀑布图）
       "chart_type": "line",
@@ -933,17 +961,18 @@ class sptmChart {
     this.thresholdDiv.addEventListener('mousemove', this._boundHandleThresholdMousemove);
     this.thresholdDiv.addEventListener('mouseout', this._boundHandleThresholdMouseout);
     this.thresholdDiv.addEventListener('mouseup', this._boundHandleThresholdMouseout);
+    // 移动端触控支持：门限图标
+    this._boundHandleThresholdTouchStart = this._handleThresholdTouchStart.bind(this);
+    this._boundHandleThresholdTouchMove = this._handleThresholdTouchMove.bind(this);
+    this._boundHandleThresholdTouchEnd = this._handleThresholdTouchEnd.bind(this);
+    this.thresholdDiv.addEventListener('touchstart', this._boundHandleThresholdTouchStart, { passive: false });
+    this.thresholdDiv.addEventListener('touchmove', this._boundHandleThresholdTouchMove, { passive: false });
+    this.thresholdDiv.addEventListener('touchend', this._boundHandleThresholdTouchEnd, { passive: false });
   }
   
   _initFredTip(){
-    const freqTip= document.createElement('span');
-    freqTip.className = 'sptmchart_freqtip';
-    freqTip.style.display = 'none';
-    freqTip.style.position = 'absolute';
-    freqTip.style.color=this.options.level_tipline.text_color;
-    freqTip.style.fontSize = `${this.options.level_tipline.text_size*this.devicePixelRatio}px`;
-    this.canvas.parentNode.appendChild(freqTip);
-    this.fretipDiv =freqTip
+    // 提示框已改为Canvas绘制，不再创建DOM元素
+    this.fretipDiv = null;
   }
   
   /**
@@ -1302,12 +1331,10 @@ class sptmChart {
         this._tipFreqLevel(mouselevel)
       }else{
         this.options.level_tipline.is_draw=false;
-        this.fretipDiv.style.display="none";
       }
       
     }else{
       this.options.level_tipline.is_draw=false;
-      this.fretipDiv.style.display="none";
     }
   }
   
@@ -2012,18 +2039,25 @@ class sptmChart {
    * @param {*} event 
    */
   _handleMousedown(event) {
-    //先检查是否点击了Marker
+    // 如果当前是touch交互，且是浏览器自动触发的真实mouse事件，则忽略避免重复
+    if(this._isTouchActive && event instanceof MouseEvent)return;
+    
     const rect=this.canvas.getBoundingClientRect();
     const point={
       x:event.clientX-rect.left,
       y:event.clientY-rect.top
     };
     
+    // 记录mousedown位置和时间，用于区分点击和拖动
+    this._mouseDownPos={x:point.x,y:point.y};
+    this._mouseDownTime=Date.now();
+    
     const dpiPair={x:96*this.devicePixelRatio,y:96*this.devicePixelRatio};
     
+    // 优先级1：检测Marker（最高优先级）
     for(const [id,marker] of this._markerList){
       if(marker.isVisible() && marker.containsPoint(point,dpiPair)){
-        this._markerDragState.isDragging=true;
+        this._currentOperation='markerDrag';
         this._markerDragState.dragMarkerId=id;
         this._markerDragState.lastX=point.x;
         this._markerDragState.lastY=point.y;
@@ -2033,6 +2067,36 @@ class sptmChart {
       }
     }
     
+    // 优先级2：检测门限图标
+    // 门限图标有独立的事件监听，这里不处理
+    
+    // 优先级3：检测选区功能
+    const sb = this.options.selectionBox;
+    if (sb && sb.enabled && event.button === 0) {
+      const posType = this._getMousePosition(event);
+      if (posType === 'grid') {
+        this._currentOperation='selectionBox';
+        this._selectionBox.pending = true;
+        this._selectionBox.startX = event.offsetX;
+        this._selectionBox.startY = event.offsetY;
+        this._selectionBox.currentX = event.offsetX;
+        this._selectionBox.currentY = event.offsetY;
+        this._selectionBox.active = false;
+        // 长按延迟后自动激活选框
+        const delay = sb.longPressDelay || 200;
+        this._selectionBox.timer = setTimeout(() => {
+          if (this._selectionBox.pending) {
+            this._selectionBox.active = true;
+            this._selectionBox.pending = false;
+            this._scheduleDraw();
+          }
+        }, delay);
+        return;
+      }
+    }
+    
+    // 优先级4：图表平移
+    this._currentOperation='pan';
     this.mousedownInfo={
       isMouseDown:true,
       startX:event.offsetX,
@@ -2058,29 +2122,6 @@ class sptmChart {
     } else if (event.button === 2) {
       this.ctx.canvas.style.cursor = 'grab';
     }
-
-    // 选框功能：在网格区域按下时启动 pending 状态
-    const sb = this.options.selectionBox;
-    if (sb && sb.enabled && event.button === 0) {
-      const posType = this._getMousePosition(event);
-      if (posType === 'grid') {
-        this._selectionBox.pending = true;
-        this._selectionBox.startX = event.offsetX;
-        this._selectionBox.startY = event.offsetY;
-        this._selectionBox.currentX = event.offsetX;
-        this._selectionBox.currentY = event.offsetY;
-        this._selectionBox.active = false;
-        // 长按延迟后自动激活选框
-        const delay = sb.longPressDelay || 200;
-        this._selectionBox.timer = setTimeout(() => {
-          if (this._selectionBox.pending) {
-            this._selectionBox.active = true;
-            this._selectionBox.pending = false;
-            this._scheduleDraw();
-          }
-        }, delay);
-      }
-    }
   }
   
   /**
@@ -2088,49 +2129,78 @@ class sptmChart {
    * @param {*} event
    */
   _handleMouseup(event) {
+    // 如果当前是touch交互，且是浏览器自动触发的真实mouse事件，则忽略避免重复
+    if(this._isTouchActive && event instanceof MouseEvent)return;
+    
     // 取消可能挂起的 raf 绘制，避免交互结束后再执行一次多余绘制
     this._cancelScheduledDraw();
-    // 瀑布图模式：结束色系拖动
-    if (this.options.chart_type === 'waterfall') {
-      this._waterfall.endDrag();
-    }
-    if(this._markerDragState.isDragging){
-      const marker=this._markerList.get(this._markerDragState.dragMarkerId);
-      if(marker){
-        marker.handleReleaseEvent({
-          x:this._markerDragState.lastX,
-          y:this._markerDragState.lastY
-        });
-      }
-      this._markerDragState.isDragging=false;
-      this._markerDragState.dragMarkerId=0;
-      this._scheduleDraw();
-      return;
+    
+    const rect=this.canvas.getBoundingClientRect();
+    const point={
+      x:event.clientX-rect.left,
+      y:event.clientY-rect.top
+    };
+    
+    // 计算移动距离和时间差，区分点击和拖动
+    const dx=point.x-this._mouseDownPos.x;
+    const dy=point.y-this._mouseDownPos.y;
+    const dist=Math.sqrt(dx*dx+dy*dy);
+    const timeDiff=Date.now()-this._mouseDownTime;
+    const isClick=dist<this._dragThreshold&&timeDiff<300; // 移动距离<5px且时间<300ms视为点击
+    
+    // 根据操作类型处理mouseup
+    switch(this._currentOperation){
+      case 'markerDrag':
+        // Marker拖动结束
+        if(isClick){
+          // 点击：设置焦点（已在mousedown时设置）
+          console.log('Marker clicked');
+        }else{
+          // 拖动：释放
+          const marker=this._markerList.get(this._markerDragState.dragMarkerId);
+          if(marker){
+            marker.handleReleaseEvent({
+              x:this._markerDragState.lastX,
+              y:this._markerDragState.lastY
+            });
+          }
+          this._scheduleDraw();
+        }
+        this._markerDragState.isDragging=false;
+        this._markerDragState.dragMarkerId=0;
+        break;
+        
+      case 'selectionBox':
+        // 选框结束
+        if(this._selectionBox.active){
+          this._endSelectionBox(event);
+          this._suppressClick=true;
+        }
+        if(this._selectionBox.pending){
+          clearTimeout(this._selectionBox.timer);
+          this._selectionBox.timer=null;
+          this._selectionBox.pending=false;
+        }
+        break;
+        
+      case 'pan':
+        // 平移结束
+        let mousedowinfo={
+          isMouseDown:false,
+          mouseupx:event.offsetX,
+          mouseupy:event.offsetY,
+          button:event.button
+        }
+        this.mousedownInfo={
+          ...this.mousedownInfo,
+          ...mousedowinfo
+        }
+        this.ctx.canvas.style.cursor='default';
+        break;
     }
     
-    let mousedowinfo={
-      isMouseDown:false,
-      mouseupx:event.offsetX,
-      mouseupy:event.offsetY,
-      button:event.button
-    }
-    this.mousedownInfo={
-      ...this.mousedownInfo,
-      ...mousedowinfo
-    }
-    this.ctx.canvas.style.cursor = 'default';
-
-    // 选框功能：处理选框结束
-    if (this._selectionBox.active) {
-      this._endSelectionBox(event);
-      this._suppressClick = true;
-      return;
-    }
-    if (this._selectionBox.pending) {
-      clearTimeout(this._selectionBox.timer);
-      this._selectionBox.timer = null;
-      this._selectionBox.pending = false;
-    }
+    // 清理操作状态
+    this._currentOperation=null;
   }
   
     /**
@@ -2138,121 +2208,121 @@ class sptmChart {
    * @param {*} event 
    */
   _handleMousemove(event) {
-    //拖动
-    if(this._markerDragState.isDragging){
-      const rect=this.canvas.getBoundingClientRect();
-      const point={
-        x:event.clientX-rect.left,
-        y:event.clientY-rect.top
-      };
-      
-      const clampedX=Math.max(this.options.grid.left,Math.min(this.width-this.options.grid.right,point.x));
-      const clampedY=Math.max(this.options.grid.top,Math.min(this.height-this.options.grid.bottom,point.y));
-      
-      const marker=this._markerList.get(this._markerDragState.dragMarkerId);
-      if(marker){
-        marker.handleMoveEvent({x:clampedX,y:clampedY});
-        this._updateMarkerData(marker);
-        // 更新标牌锚点位置，确保拖动时标牌跟随
-        marker.setScutchonAnchor({x:clampedX,y:clampedY});
-      }
-      
-      this._markerDragState.lastX=clampedX;
-      this._markerDragState.lastY=clampedY;
-      this._scheduleDraw();
-      return;
-    }
+    // 如果当前是touch交互，且是浏览器自动触发的真实mouse事件，则忽略避免重复
+    if(this._isTouchActive && event instanceof MouseEvent)return;
     
-    let x = event.offsetX;
-    let y = event.offsetY;
-
-    // 选框功能：如果选框已激活或待触发，优先处理选框
-    if (this._selectionBox.active) {
-      this._selectionBox.currentX = event.offsetX;
-      this._selectionBox.currentY = event.offsetY;
-      this._scheduleDraw();
-      return;
-    }
-    if (this._selectionBox.pending) {
-      const dx = event.offsetX - this._selectionBox.startX;
-      const dy = event.offsetY - this._selectionBox.startY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const minW = this.options.selectionBox?.minWidth || 5;
-      if (dist > minW) {
-        // 移动距离超过阈值，提前激活选框
-        clearTimeout(this._selectionBox.timer);
-        this._selectionBox.timer = null;
-        this._selectionBox.active = true;
-        this._selectionBox.pending = false;
-        this._selectionBox.currentX = event.offsetX;
-        this._selectionBox.currentY = event.offsetY;
+    const rect=this.canvas.getBoundingClientRect();
+    const point={
+      x:event.clientX-rect.left,
+      y:event.clientY-rect.top
+    };
+    
+    // 根据当前操作类型分发处理
+    switch(this._currentOperation){
+      case 'markerDrag':
+        // Marker拖动模式
+        this._markerDragState.isDragging=true;
+        const clampedX=Math.max(this.options.grid.left,Math.min(this.width-this.options.grid.right,point.x));
+        const clampedY=Math.max(this.options.grid.top,Math.min(this.height-this.options.grid.bottom,point.y));
+        const marker=this._markerList.get(this._markerDragState.dragMarkerId);
+        if(marker){
+          marker.handleMoveEvent({x:clampedX,y:clampedY});
+          this._updateMarkerData(marker);
+          marker.setScutchonAnchor({x:clampedX,y:clampedY});
+        }
+        this._markerDragState.lastX=clampedX;
+        this._markerDragState.lastY=clampedY;
         this._scheduleDraw();
         return;
-      }
-      // pending 状态下不执行平移等其他操作
-      return;
-    }
-
-    if (this.mousedownInfo.isMouseDown) {
-      // 瀑布图色系条拖动
-      if (this.options.chart_type === 'waterfall' && this._waterfall._colorBarDrag.active) {
-        const rect = this.canvas.getBoundingClientRect();
-        const mouseY = event.clientY - rect.top;
-        this._waterfall.handleColorBarDrag(mouseY, false);
-        this._scheduleDrawChart();
+        
+      case 'selectionBox':
+        // 选框模式
+        if(this._selectionBox.active){
+          this._selectionBox.currentX=event.offsetX;
+          this._selectionBox.currentY=event.offsetY;
+          this._scheduleDraw();
+          return;
+        }
+        if(this._selectionBox.pending){
+          const dx=event.offsetX-this._selectionBox.startX;
+          const dy=event.offsetY-this._selectionBox.startY;
+          const dist=Math.sqrt(dx*dx+dy*dy);
+          const minW=this.options.selectionBox?.minWidth||5;
+          if(dist>minW){
+            clearTimeout(this._selectionBox.timer);
+            this._selectionBox.timer=null;
+            this._selectionBox.active=true;
+            this._selectionBox.pending=false;
+            this._selectionBox.currentX=event.offsetX;
+            this._selectionBox.currentY=event.offsetY;
+            this._scheduleDraw();
+            return;
+          }
+          return;
+        }
         return;
-      }
-
-      if(this.moveInfo.preX==0){
-        this.moveInfo.preX = this.mousedownInfo.startX;
-        this.moveInfo.preY = this.mousedownInfo.startY;
-      }
-      const moveX = event.offsetX - this.moveInfo.preX;
-      const moveY = this.moveInfo.preY-event.offsetY;
-      
-      if (Math.abs(moveX) > Math.abs(moveY)) {
-        let mouseVal=this.getMouseVal(event);
-        let order=mouseVal.order;
-        if(order!==null){
-          let labelInfo=this.xLabelGridInfo[order];
-          let moveVal=Math.ceil(Math.abs(labelInfo.show_end_freq-labelInfo.show_start_freq)/labelInfo.width*moveX);
-          if(moveVal==0)moveVal=Math.sign(moveX);
-          let minval=labelInfo.show_start_freq-moveVal;
-          let maxval=labelInfo.show_end_freq-moveVal;
-          if(minval>=labelInfo.start_freq&&maxval<=labelInfo.end_freq){
-            this.xLabelGridInfo[order].show_start_freq=minval;
-            this.xLabelGridInfo[order].show_end_freq=maxval;
-            let newCenter=minval+Math.floor((maxval-minval)/2);
-            this.xLabelGridInfo[order].draw_zoom_freq=newCenter;
-            // 频率范围改变时，更新 Marker 位置
-            this._updateMarkersPositionByFreq();
+        
+      case 'pan':
+        // 图表平移模式
+        if(this.mousedownInfo.isMouseDown){
+          // 瀑布图色系条拖动
+          if(this.options.chart_type==='waterfall'&&this._waterfall._colorBarDrag.active){
+            const mouseY=event.clientY-rect.top;
+            this._waterfall.handleColorBarDrag(mouseY,false);
             this._scheduleDrawChart();
+            return;
+          }
+
+          if(this.moveInfo.preX==0){
+            this.moveInfo.preX=this.mousedownInfo.startX;
+            this.moveInfo.preY=this.mousedownInfo.startY;
+          }
+          const moveX=event.offsetX-this.moveInfo.preX;
+          const moveY=this.moveInfo.preY-event.offsetY;
+          
+          if(Math.abs(moveX)>Math.abs(moveY)){
+            let mouseVal=this.getMouseVal(event);
+            let order=mouseVal.order;
+            if(order!==null){
+              let labelInfo=this.xLabelGridInfo[order];
+              let moveVal=Math.ceil(Math.abs(labelInfo.show_end_freq-labelInfo.show_start_freq)/labelInfo.width*moveX);
+              if(moveVal==0)moveVal=Math.sign(moveX);
+              let minval=labelInfo.show_start_freq-moveVal;
+              let maxval=labelInfo.show_end_freq-moveVal;
+              if(minval>=labelInfo.start_freq&&maxval<=labelInfo.end_freq){
+                this.xLabelGridInfo[order].show_start_freq=minval;
+                this.xLabelGridInfo[order].show_end_freq=maxval;
+                let newCenter=minval+Math.floor((maxval-minval)/2);
+                this.xLabelGridInfo[order].draw_zoom_freq=newCenter;
+                this._updateMarkersPositionByFreq();
+                this._scheduleDrawChart();
+              }
+            }
+          }else{
+            let moveVal=Math.ceil(Math.abs(this.options.yaxis.max_value-this.options.yaxis.min_value)/this.chartHeight*moveY);
+            if(moveVal==0)moveVal=Math.sign(moveY);
+            let minval=this.options.yaxis.min_value-moveVal;
+            let maxval=this.options.yaxis.max_value-moveVal;
+            if(minval>=this.options.yaxis.floor_value&&maxval<=this.options.yaxis.ceiling_value){
+              this.options.yaxis.min_value=minval;
+              this.options.yaxis.max_value=maxval;
+              this._updateMarkersPositionByFreq();
+              this._scheduleDrawChart();
+            }
           }
         }
-      } else {
-        let moveVal=Math.ceil(Math.abs(this.options.yaxis.max_value-this.options.yaxis.min_value)/this.chartHeight*moveY);
-        if(moveVal==0)moveVal=Math.sign(moveY);
-        let minval=this.options.yaxis.min_value-moveVal;
-        let maxval=this.options.yaxis.max_value-moveVal;
-        if(minval>=this.options.yaxis.floor_value&&maxval<=this.options.yaxis.ceiling_value){
-          this.options.yaxis.min_value=minval;
-          this.options.yaxis.max_value=maxval;
-          // Y 轴范围改变时，如果 Marker 跟随谱线，也需要更新位置
-          this._updateMarkersPositionByFreq();
-          this._scheduleDrawChart();
-        }
-      }
-    }else{
-      let type=this._getMousePosition(event);
-      if(type=="grid"){
-        let point=this.getMousePoint(event);
-        this.options.level_tipline.point=point;
-        // 使用 throttle 节流，避免频繁重绘导致卡顿
-        this._throttledScheduleDraw();
-      }
+        break;
     }
     
-    // 直接修改属性，避免每帧 mousemove 都创建新对象
+    // 非拖动状态下的鼠标移动：更新hover状态
+    let type=this._getMousePosition(event);
+    if(type=="grid"){
+      let point=this.getMousePoint(event);
+      this.options.level_tipline.point=point;
+      this._throttledScheduleDraw();
+    }
+    
+    // 直接修改属性，避免每帧mousemove都创建新对象
     this.moveInfo.isMove = true;
     this.moveInfo.preX = event.offsetX;
     this.moveInfo.preY = event.offsetY;
@@ -2267,6 +2337,8 @@ class sptmChart {
    * @param {*} event 
    */
   _handleMouseout(event){
+    // 如果当前是touch交互，且是浏览器自动触发的真实mouse事件，则忽略避免重复
+    if(this._isTouchActive && event instanceof MouseEvent)return;
     event.preventDefault();
     this._cancelScheduledDraw();
     this.mousedownInfo.isMouseDown=false;
@@ -2276,11 +2348,210 @@ class sptmChart {
     this.moveInfo.moveX=0;
     this.moveInfo.moveY=0;
   }
-  
+
+  // ========== 移动端触控事件处理（Touch事件映射到Mouse事件）==========
+
+  /**
+   * 将Touch事件转换为模拟MouseEvent对象
+   * @private
+   */
+  _createMouseEvent(touch, type, button = 0) {
+    const rect = this.canvas.getBoundingClientRect();
+    const offsetX = touch.clientX - rect.left;
+    const offsetY = touch.clientY - rect.top;
+    return {
+      clientX: touch.clientX,
+      clientY: touch.clientY,
+      offsetX: offsetX,
+      offsetY: offsetY,
+      button: button,
+      preventDefault: () => {},
+      stopPropagation: () => {}
+    };
+  }
+
+  /**
+   * 计算双指触控距离
+   * @private
+   */
+  _getTouchDistance(touches) {
+    if (touches.length < 2) return 0;
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  /**
+   * touchstart事件处理
+   * @private
+   */
+  _handleTouchStart(event) {
+    event.preventDefault();
+    this._isTouchActive = true;
+
+    if (event.touches.length === 1) {
+      const touch = event.touches[0];
+      this._touchStartPos = { x: touch.clientX, y: touch.clientY };
+      this._touchStartTime = Date.now();
+      this._longPressTriggered = false;
+
+      // 创建mousedown事件并触发
+      const mouseEvent = this._createMouseEvent(touch, 'mousedown');
+      this._handleMousedown(mouseEvent);
+
+      // 长按检测（500ms）
+      this._longPressTimer = setTimeout(() => {
+        this._longPressTimer = null;
+        this._longPressTriggered = true;
+        // 触发右键菜单
+        if (this.options.contextMenu?.enabled) {
+          const ctxEvent = this._createMouseEvent(touch, 'contextmenu');
+          this._handleContextMenu(ctxEvent);
+        }
+      }, 500);
+    } else if (event.touches.length === 2) {
+      // 双指缩放：取消长按，记录初始距离
+      if (this._longPressTimer) {
+        clearTimeout(this._longPressTimer);
+        this._longPressTimer = null;
+      }
+      this._lastTouchDist = this._getTouchDistance(event.touches);
+    }
+  }
+
+  /**
+   * touchmove事件处理
+   * @private
+   */
+  _handleTouchMove(event) {
+    event.preventDefault();
+
+    if (event.touches.length === 1) {
+      const touch = event.touches[0];
+
+      // 如果移动距离超过阈值，取消长按
+      if (this._longPressTimer && this._touchStartPos) {
+        const dx = touch.clientX - this._touchStartPos.x;
+        const dy = touch.clientY - this._touchStartPos.y;
+        if (Math.sqrt(dx * dx + dy * dy) > 10) {
+          clearTimeout(this._longPressTimer);
+          this._longPressTimer = null;
+        }
+      }
+
+      // 判断是否为拖动模式（移动距离 >= 10px）
+      let isDragging = false;
+      if (this._touchStartPos) {
+        const dx = touch.clientX - this._touchStartPos.x;
+        const dy = touch.clientY - this._touchStartPos.y;
+        if (Math.sqrt(dx * dx + dy * dy) >= 10) {
+          isDragging = true;
+        }
+      }
+
+      if (isDragging) {
+        // 拖动模式：设置 isMouseDown 并调用 mousemove
+        this.mousedownInfo.isMouseDown = true;
+        const mouseEvent = this._createMouseEvent(touch, 'mousemove');
+        this._handleMousemove(mouseEvent);
+      } else {
+        // 轻触 hover 模式：模拟鼠标在 grid 区域 hover，显示频率提示
+        const mouseEvent = this._createMouseEvent(touch, 'mousemove');
+        const type = this._getMousePosition(mouseEvent);
+        if (type === 'grid') {
+          const point = this.getMousePoint(mouseEvent);
+          this.options.level_tipline.point = point;
+          this._throttledScheduleDraw();
+        }
+      }
+    } else if (event.touches.length === 2) {
+      // 双指缩放
+      const dist = this._getTouchDistance(event.touches);
+      if (this._lastTouchDist > 0) {
+        const delta = dist > this._lastTouchDist ? 1 : -1;
+        const diff = Math.abs(dist - this._lastTouchDist);
+        if (diff > 5) {
+          // 根据双指连线方向决定缩放轴：
+          // 水平方向(dx>dy) → 缩放X轴（模拟网格区域滚轮）
+          // 垂直方向(dy>dx) → 缩放Y轴（模拟左侧Y轴区域滚轮）
+          const touchDx = Math.abs(event.touches[0].clientX - event.touches[1].clientX);
+          const touchDy = Math.abs(event.touches[0].clientY - event.touches[1].clientY);
+          const zoomEvent = this._createMouseEvent(event.touches[0], 'wheel');
+          if (touchDy > touchDx) {
+            // 主要垂直方向：将位置移到左侧Y轴区域，触发Y轴缩放
+            const rect = this.canvas.getBoundingClientRect();
+            zoomEvent.clientX = rect.left + this.options.grid.left - 5;
+            zoomEvent.offsetX = this.options.grid.left - 5;
+          }
+          this._throttledHandleZoom(zoomEvent, delta);
+          this._lastTouchDist = dist;
+        }
+      }
+    }
+  }
+
+  /**
+   * touchend事件处理
+   * @private
+   */
+  _handleTouchEnd(event) {
+    // 清理长按定时器
+    if (this._longPressTimer) {
+      clearTimeout(this._longPressTimer);
+      this._longPressTimer = null;
+    }
+
+    // 如果长按已触发，不执行mouseup（避免和右键菜单冲突）
+    if (this._longPressTriggered) {
+      this._longPressTriggered = false;
+      this._isTouchActive = false;
+      return;
+    }
+
+    // 创建mouseup事件并触发
+    if (event.changedTouches.length > 0) {
+      const touch = event.changedTouches[0];
+      const mouseEvent = this._createMouseEvent(touch, 'mouseup');
+      this._handleMouseup(mouseEvent);
+
+      // 判断是否为点击（非拖动），模拟 click 以支持 clickBlankToExit 等逻辑
+      if (this._touchStartPos) {
+        const dx = touch.clientX - this._touchStartPos.x;
+        const dy = touch.clientY - this._touchStartPos.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const timeDiff = Date.now() - this._touchStartTime;
+        if (dist < this._dragThreshold && timeDiff < 300) {
+          const clickEvent = this._createMouseEvent(touch, 'click');
+          this._handleClick(clickEvent);
+        }
+      }
+    }
+
+    // 延迟重置_isTouchActive，避免浏览器后续触发的mouse事件重复执行
+    setTimeout(() => {
+      this._isTouchActive = false;
+    }, 100);
+  }
+
+  /**
+   * touchcancel事件处理
+   * @private
+   */
+  _handleTouchCancel(event) {
+    if (this._longPressTimer) {
+      clearTimeout(this._longPressTimer);
+      this._longPressTimer = null;
+    }
+    this._isTouchActive = false;
+    this._lastTouchDist = 0;
+    // 触发mouseout以清理状态
+    this._handleMouseout(event);
+  }
+
   /**
    * 鼠标滚轮事件
    * @param {*} event
-   * 
+   *
    */
   _handleWheel(event) {
     event.preventDefault();
@@ -2362,13 +2633,19 @@ class sptmChart {
       return;
     }
     
-    //如果没有点击Marker，且在网格区域，移动焦点Marker
+    // 如果没有点击Marker，根据配置处理焦点和频率提示
     const type=this._getMousePosition(event);
-    if(type=="grid" && this._focusMarkerId>0){
-      this._moveFocusMarkerToPoint(point);
-    }else if(type !== "grid" && this._focusMarkerId>0 && this.options.marker?.clickBlankToExit){
-      // 如果点击了空白区域且配置了点击空白退出焦点
+    if(this._focusMarkerId>0 && this.options.marker?.clickBlankToExit){
       this.exitMarkerFocus();
+    }
+    
+    // 如果在grid区域，显示频率提示
+    if(type=="grid"){
+      this.options.level_tipline.point={
+        pointx: point.x,
+        pointy: point.y
+      };
+      this._scheduleDraw();
     }
   }
   
@@ -2446,34 +2723,147 @@ class sptmChart {
   _handleThresholdMouseout(event) {
     this.thresholdFouce=false;
   }
-  
-  /*
-  *显示强度提示框
-  */
-  _tipFreqLevel(data){
-    if(this.options.level_tipline.is_draw){
-      this.fretipDiv.style.display="block";
-      if(data.pointx - this.options.grid.left > this.chartWidth/2){
-        this.fretipDiv.style.left="";
-        this.fretipDiv.style.right=`${this.width-data.pointx+10}px`;
-      }else{
-        this.fretipDiv.style.right="";
-        this.fretipDiv.style.left=`${data.pointx+10}px`;
-      }
-      this.fretipDiv.style.top=`${this.options.grid.top+40}px`;
-      let levels=Math.max(...data.y);
-      let centtext=this.options.yaxis.axis_function(levels);
-      if(isNaN(centtext)){
-        centtext="--";
-      }
-      if(this.options.level_tipline.freq_visible){
-        this.fretipDiv.innerText=`强度：${centtext}${this.options.yaxis.unit} \n频率：${data.x/1000000} MHz`;
-      }else{
-        this.fretipDiv.innerText=`强度：${centtext}${this.options.yaxis.unit}`;
-      }
-    }else{
-      this.fretipDiv.style.display="none";
+
+  // ========== 门限图标移动端触控支持 ==========
+
+  /**
+   * 门限图标touchstart事件
+   * @private
+   */
+  _handleThresholdTouchStart(event) {
+    event.preventDefault();
+    this._isTouchActive = true;
+    this.focusType = "threshold";
+    this.thresholdFouce = true;
+  }
+
+  /**
+   * 门限图标touchmove事件
+   * @private
+   */
+  _handleThresholdTouchMove(event) {
+    event.preventDefault();
+    if (this.thresholdFouce && event.touches.length > 0) {
+      const touch = event.touches[0];
+      const mouseEvent = this._createMouseEvent(touch, 'mousemove');
+      const leves = this.getMouseVal(mouseEvent, 2).y;
+      this.options.threshold.level = leves;
+      this._scheduleDrawChart();
     }
+  }
+
+  /**
+   * 门限图标touchend事件
+   * @private
+   */
+  _handleThresholdTouchEnd(event) {
+    this.thresholdFouce = false;
+    setTimeout(() => {
+      this._isTouchActive = false;
+    }, 100);
+  }
+
+  // ========== 强度提示框（Canvas绘制）
+  _tipFreqLevel(data){
+    if(!this.options.level_tipline.is_draw) return;
+    
+    const point = data;
+    const tipConfig = this.options.level_tipline;
+    const levels = Math.max(...data.y);
+    let centtext = this.options.yaxis.axis_function(levels);
+    if(isNaN(centtext)){
+      centtext = "--";
+    }
+    
+    // 构建文本内容
+    const lines = [];
+    if(tipConfig.freq_visible){
+      lines.push(`强度：${centtext}${this.options.yaxis.unit}`);
+      lines.push(`频率：${(data.x/1000000).toFixed(6)} MHz`);
+    }else{
+      lines.push(`强度：${centtext}${this.options.yaxis.unit}`);
+    }
+    
+    // 计算文本框尺寸
+    this.ctx.font = `${tipConfig.tip_font_size * this.devicePixelRatio}px Arial`;
+    let maxWidth = 0;
+    for(const line of lines){
+      const metrics = this.ctx.measureText(line);
+      if(metrics.width > maxWidth) maxWidth = metrics.width;
+    }
+    
+    const padding = tipConfig.tip_padding * this.devicePixelRatio;
+    const fontSize = tipConfig.tip_font_size * this.devicePixelRatio;
+    const lineHeight = fontSize * 1.4;
+    const boxWidth = maxWidth + padding * 2;
+    const boxHeight = lines.length * lineHeight + padding * 2;
+    const borderRadius = tipConfig.tip_border_radius * this.devicePixelRatio;
+    
+    // 计算提示框位置（参考Marker标牌位置计算方式：先计算默认位置，再边界检测调整）
+    const MARGIN = 10; // 与Marker标牌保持一致，使用边距
+    const gridRight = this.options.grid.left + this.chartWidth;
+    const gridBottom = this.options.grid.top + this.chartHeight;
+    
+    // 默认位置：位于pointx右侧，顶部对齐
+    let boxX = point.pointx + MARGIN;
+    let boxY = point.pointy + MARGIN;
+    
+    // 边界检测和调整（参考Marker标牌的边界约束逻辑）
+    // 1. 如果右侧超出画布边界，显示在左侧
+    if (boxX + boxWidth > gridRight - MARGIN) {
+      boxX = point.pointx - boxWidth - MARGIN;
+    }
+    
+    // 2. 如果下方超出画布边界，显示在上方
+    if (boxY + boxHeight > gridBottom - MARGIN) {
+      boxY = point.pointy - boxHeight - MARGIN;
+    }
+    
+    // 3. 如果左侧超出画布边界，紧贴左边
+    if (boxX < this.options.grid.left + MARGIN) {
+      boxX = this.options.grid.left + MARGIN;
+    }
+    
+    // 4. 如果上方超出画布边界，紧贴上边
+    if (boxY < this.options.grid.top + MARGIN) {
+      boxY = this.options.grid.top + MARGIN;
+    }
+    
+    // 5. 确保不超出画布绝对边界
+    if (boxX + boxWidth > this.width) {
+      boxX = this.width - boxWidth - MARGIN;
+    }
+    if (boxY + boxHeight > this.height) {
+      boxY = this.height - boxHeight - MARGIN;
+    }
+    if (boxX < MARGIN) boxX = MARGIN;
+    if (boxY < MARGIN) boxY = MARGIN;
+    
+    // 绘制背景
+    this.ctx.save();
+    this.ctx.fillStyle = tipConfig.tip_background;
+    this.ctx.beginPath();
+    this.ctx.moveTo(boxX + borderRadius, boxY);
+    this.ctx.lineTo(boxX + boxWidth - borderRadius, boxY);
+    this.ctx.quadraticCurveTo(boxX + boxWidth, boxY, boxX + boxWidth, boxY + borderRadius);
+    this.ctx.lineTo(boxX + boxWidth, boxY + boxHeight - borderRadius);
+    this.ctx.quadraticCurveTo(boxX + boxWidth, boxY + boxHeight, boxX + boxWidth - borderRadius, boxY + boxHeight);
+    this.ctx.lineTo(boxX + borderRadius, boxY + boxHeight);
+    this.ctx.quadraticCurveTo(boxX, boxY + boxHeight, boxX, boxY + boxHeight - borderRadius);
+    this.ctx.lineTo(boxX, boxY + borderRadius);
+    this.ctx.quadraticCurveTo(boxX, boxY, boxX + borderRadius, boxY);
+    this.ctx.closePath();
+    this.ctx.fill();
+    
+    // 绘制文本
+    this.ctx.fillStyle = tipConfig.tip_text_color;
+    this.ctx.textAlign = 'left';
+    this.ctx.textBaseline = 'top';
+    for(let i = 0; i < lines.length; i++){
+      const textY = boxY + padding + i * lineHeight;
+      this.ctx.fillText(lines[i], boxX + padding, textY);
+    }
+    this.ctx.restore();
   }
   
   /**
@@ -2850,7 +3240,8 @@ class sptmChart {
    * @returns 
    */
   _getMousePosition(events) {
-    var event = window.event||events;
+    // 优先使用传入的事件对象，避免 window.event 干扰（移动端 touch 事件中 window.event 是 TouchEvent，没有 clientX）
+    var event = events || window.event;
     const rect = this.canvas.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
@@ -3501,6 +3892,11 @@ class sptmChart {
       this.canvas.removeEventListener('dblclick', this._boundHandleDblClick);
       this.canvas.removeEventListener('click', this._boundHandleClick);
       this.canvas.removeEventListener('contextmenu', this._boundHandleContextMenu);
+      // 移除移动端触控事件
+      this.canvas.removeEventListener('touchstart', this._boundHandleTouchStart);
+      this.canvas.removeEventListener('touchmove', this._boundHandleTouchMove);
+      this.canvas.removeEventListener('touchend', this._boundHandleTouchEnd);
+      this.canvas.removeEventListener('touchcancel', this._boundHandleTouchCancel);
     }
 
     // 6. 移除 window 事件监听器
@@ -3514,15 +3910,22 @@ class sptmChart {
       this.thresholdDiv.removeEventListener('mousemove', this._boundHandleThresholdMousemove);
       this.thresholdDiv.removeEventListener('mouseout', this._boundHandleThresholdMouseout);
       this.thresholdDiv.removeEventListener('mouseup', this._boundHandleThresholdMouseout);
+      // 移除移动端触控事件
+      this.thresholdDiv.removeEventListener('touchstart', this._boundHandleThresholdTouchStart);
+      this.thresholdDiv.removeEventListener('touchmove', this._boundHandleThresholdTouchMove);
+      this.thresholdDiv.removeEventListener('touchend', this._boundHandleThresholdTouchEnd);
       this.thresholdDiv.remove();
       this.thresholdDiv = null;
     }
 
-    // 8. 移除 freqTip DOM 元素
-    if (this.fretipDiv) {
-      this.fretipDiv.remove();
-      this.fretipDiv = null;
+    // 清理长按定时器
+    if (this._longPressTimer) {
+      clearTimeout(this._longPressTimer);
+      this._longPressTimer = null;
     }
+
+    // 8. 移除 freqTip DOM 元素（已改为Canvas绘制，无需移除）
+    this.fretipDiv = null;
 
     // 9. 移除 canvas 和容器
     if (this.canvas) {

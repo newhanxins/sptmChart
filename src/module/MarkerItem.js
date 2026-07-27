@@ -724,11 +724,22 @@ class MarkerItem {
         const minY = Math.min(...pathPoints.map(p => p.y));
         const maxY = Math.max(...pathPoints.map(p => p.y));
 
-        const hitPadding = 10; // 增加点击容差范围
-        return localPoint.x >= minX - hitPadding &&
+        const hitPadding = 20; // 增大点击容差范围到20px，提升选中体验
+        const inIconArea = localPoint.x >= minX - hitPadding &&
                localPoint.x <= maxX + hitPadding &&
                localPoint.y >= minY - hitPadding &&
                localPoint.y <= maxY + hitPadding;
+        
+        if (inIconArea) return true;
+        
+        // 如果显示垂直线，增加垂直线附近点击检测（X方向±20px，整个Y轴范围）
+        if (this._verticalLine) {
+            const inVerticalLineX = localPoint.x >= ptMarker.x - 20 && localPoint.x <= ptMarker.x + 20;
+            const inVerticalLineY = localPoint.y >= 0 && localPoint.y <= this._rect.height;
+            if (inVerticalLineX && inVerticalLineY) return true;
+        }
+        
+        return false;
     }
 
     // ========== 私有绘制方法 ==========
