@@ -78,14 +78,90 @@
       color: #ff9800;
       font-weight: bold;
     }
+    .panel-section {
+      margin: 10px 0;
+      padding: 15px;
+      background: #f5f5f5;
+      border-radius: 8px;
+    }
+    .panel-section h3 {
+      margin: 0 0 10px 0;
+      color: #333;
+      font-size: 16px;
+    }
+    .trace-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .trace-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #fff;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 13px;
+      border-left: 3px solid #ccc;
+    }
+    .trace-item.active {
+      border-left-color: #4caf50;
+    }
+    .trace-item.hidden {
+      border-left-color: #999;
+      opacity: 0.6;
+    }
+    .trace-color {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .trace-name {
+      font-weight: 500;
+      min-width: 80px;
+    }
+    .trace-btns {
+      display: flex;
+      gap: 4px;
+    }
+    .trace-btns button {
+      padding: 2px 8px;
+      font-size: 12px;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+    .trace-btns .btn-hide {
+      background: #ff9800;
+      color: white;
+    }
+    .trace-btns .btn-show {
+      background: #4caf50;
+      color: white;
+    }
+    .trace-btns .btn-del {
+      background: #f44336;
+      color: white;
+    }
   </style>
 </head>
 <body>
   <div id="mycanvas" style="color: rebeccapurple;"></div>
   
+  <!-- 图表模式控制 -->
+  <div class="panel-section">
+    <h3>图表模式</h3>
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="setChartType('line')">线图模式</button>
+      <button class="btn btn-success" onclick="setChartType('waterfall')">瀑布图模式</button>
+    </div>
+  </div>
+
   <!-- Marker控制面板 -->
-  <div class="marker-panel">
-    <h3>🎯 Marker 控制面板</h3>
+  <div class="panel-section">
+    <h3>Marker 控制面板</h3>
     <div class="btn-group">
       <button class="btn btn-primary" onclick="addMarker()">添加Marker</button>
       <button class="btn btn-success" onclick="addMultipleMarkers()">添加3个Marker</button>
@@ -103,6 +179,18 @@
       <span>焦点频率: <strong id="focusFreq">--</strong> MHz</span>
       <span>跟随谱线：<strong id="traceId">-</strong></span>
     </div>
+  </div>
+
+  <!-- 谱线测试面板 -->
+  <div class="panel-section">
+    <h3>谱线测试</h3>
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="addNormalTrace()">添加普通谱线</button>
+      <button class="btn btn-success" onclick="testFreqData()">测试真实频率(freq_data)</button>
+      <button class="btn btn-warning" onclick="addCompareTraces()">添加对比谱线(真实vs等间隔)</button>
+      <button class="btn btn-danger" onclick="clearAllTraces()">清除所有谱线</button>
+    </div>
+    <div id="traceList" class="trace-list"></div>
   </div>
 
   <p>
@@ -331,6 +419,7 @@
       console.log(sptmCharts.getOptions());
       console.log(sptmCharts);
       timeLine()
+      updateTraceList();
 
     };
     // 更新数据
@@ -643,6 +732,213 @@
     }
     function getOptions(){
       console.log(sptmCharts.getOptions());
+    }
+
+    // ========== freq_data 测试 ==========
+    function testFreqData() {
+      const pointCount = 1600;
+      const dataArr = generateNumbersWithDominantMiddle(pointCount, -20, 100);
+      const startFreq = 200000000;
+      const endFreq = 1000000000;
+      const freqStep = (endFreq - startFreq) / (pointCount - 1);
+
+      // 生成不规则偏移的真实频率数据：正弦波 + 随机噪声
+      const freqData = [];
+      for (let i = 0; i < pointCount; i++) {
+        const baseFreq = startFreq + i * freqStep;
+        // 多周期正弦偏移 + 随机噪声，最大偏移约 ±400kHz
+        const sineOffset = Math.sin(i / pointCount * Math.PI * 12) * 250000;
+        const randomOffset = (Math.random() - 0.5) * 150000;
+        const offset = sineOffset + randomOffset;
+        freqData.push(Math.round(baseFreq + offset));
+      }
+
+      let testData = {
+        "id": 5,
+        "type": "FFT",
+        "visibility": true,
+        "point": pointCount,
+        "name": "真实频率",
+        "color": "#00bcd4",
+        "width": 2,
+        "datainfo": [
+          {
+            "point": pointCount,
+            "step": 200000000,
+            "start_freq": startFreq,
+            "end_freq": endFreq,
+            "width": 1,
+            "data": dataArr,
+            "freq_data": freqData
+          }
+        ]
+      };
+
+      sptmCharts.addTrace(testData);
+      console.log('真实频率谱线已添加 (id=5)，频率带有正弦+随机偏移', testData);
+      updateTraceList();
+    }
+
+    // ========== 谱线控制函数 ==========
+    function addNormalTrace() {
+      const traceId = Date.now();
+      let traceData = {
+        "id": traceId,
+        "type": "FFT",
+        "visibility": true,
+        "point": 1600,
+        "name": "谱线" + traceId,
+        "color": "#" + Math.floor(Math.random()*16777215).toString(16),
+        "width": 1,
+        "datainfo": [
+          {
+            "point":1600,
+            "step":200000000,
+            "start_freq":200000000,
+            "end_freq":1000000000,
+            "width":1,
+            "data":generateNumbersWithDominantMiddle(1600, -20, 100),
+          }
+        ]
+      };
+      sptmCharts.addTrace(traceData);
+      updateTraceList();
+      console.log('普通谱线已添加', traceId);
+    }
+
+    function addCompareTraces() {
+      // 清除旧对比谱线
+      try { sptmCharts.removeTrace(100); } catch(e) {}
+      try { sptmCharts.removeTrace(101); } catch(e) {}
+
+      const pointCount = 800;
+      const startFreq = 200000000;
+      const endFreq = 1000000000;
+      const freqStep = (endFreq - startFreq) / (pointCount - 1);
+      const dataArr = generateNumbersWithDominantMiddle(pointCount, -20, 100);
+
+      // 真实频率：正弦+随机偏移
+      const freqData = [];
+      for (let i = 0; i < pointCount; i++) {
+        const baseFreq = startFreq + i * freqStep;
+        const sineOffset = Math.sin(i / pointCount * Math.PI * 8) * 300000;
+        const randomOffset = (Math.random() - 0.5) * 100000;
+        freqData.push(Math.round(baseFreq + sineOffset + randomOffset));
+      }
+
+      // 真实频率谱线
+      sptmCharts.addTrace({
+        "id": 100,
+        "type": "FFT",
+        "visibility": true,
+        "point": pointCount,
+        "name": "真实频率(偏移)",
+        "color": "#e91e63",
+        "width": 2,
+        "datainfo": [{
+          "point": pointCount,
+          "step": 200000000,
+          "start_freq": startFreq,
+          "end_freq": endFreq,
+          "width": 1,
+          "data": dataArr,
+          "freq_data": freqData
+        }]
+      });
+
+      // 等间隔对比谱线
+      sptmCharts.addTrace({
+        "id": 101,
+        "type": "FFT",
+        "visibility": true,
+        "point": pointCount,
+        "name": "等间隔对比",
+        "color": "#4caf50",
+        "width": 2,
+        "datainfo": [{
+          "point": pointCount,
+          "step": 200000000,
+          "start_freq": startFreq,
+          "end_freq": endFreq,
+          "width": 1,
+          "data": dataArr
+        }]
+      });
+
+      updateTraceList();
+      console.log('对比谱线已添加：真实频率(id=100) vs 等间隔(id=101)');
+    }
+
+    function clearAllTraces() {
+      const traces = sptmCharts.getTraces ? sptmCharts.getTraces() : [];
+      traces.forEach(t => {
+        if (typeof sptmCharts.removeTrace === 'function') {
+          sptmCharts.removeTrace(t.id);
+        }
+      });
+      updateTraceList();
+      console.log('所有谱线已清除');
+    }
+
+    function setChartType(type) {
+      if (typeof sptmCharts.setChartType === 'function') {
+        sptmCharts.setChartType(type);
+        console.log('图表模式已切换为:', type);
+      } else {
+        console.warn('当前版本不支持 setChartType，尝试通过 setOptions 切换');
+        sptmCharts.setOptions({ chart_type: type });
+      }
+    }
+
+    function updateTraceList() {
+      const container = document.getElementById('traceList');
+      if (!container) return;
+      const traces = typeof sptmCharts.getTraces === 'function' ? sptmCharts.getTraces() : [];
+      if (traces.length === 0) {
+        container.innerHTML = '<span style="color:#999;font-size:13px;">暂无谱线</span>';
+        return;
+      }
+      container.innerHTML = traces.map(t => {
+        const isVisible = t.visible !== false;
+        const color = t.color || '#ccc';
+        return `<div class="trace-item ${isVisible ? 'active' : 'hidden'}">
+          <span class="trace-color" style="background:${color}"></span>
+          <span class="trace-name">${t.name || '未命名'}(ID:${t.id})</span>
+          <div class="trace-btns">
+            <button class="${isVisible ? 'btn-hide' : 'btn-show'}" onclick="toggleTraceVisibility(${t.id})">${isVisible ? '隐藏' : '显示'}</button>
+            <button class="btn-del" onclick="removeTraceById(${t.id})">删除</button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    function toggleTraceVisibility(id) {
+      const traces = typeof sptmCharts.getTraces === 'function' ? sptmCharts.getTraces() : [];
+      const trace = traces.find(t => t.id === id);
+      if (trace) {
+        const newVisible = !(trace.visible !== false);
+        if (typeof sptmCharts.setTraceVisibility === 'function') {
+          sptmCharts.setTraceVisibility(id, newVisible);
+        } else if (typeof sptmCharts.setTranceVisible === 'function') {
+          sptmCharts.setTranceVisible(id, newVisible);
+        } else {
+          console.warn('当前版本不支持谱线可见性设置');
+        }
+        updateTraceList();
+      }
+    }
+
+    function removeTraceById(id) {
+      try {
+        if (typeof sptmCharts.removeTrace === 'function') {
+          sptmCharts.removeTrace(id);
+        } else {
+          console.warn('当前版本不支持删除谱线');
+        }
+        updateTraceList();
+      } catch(e) {
+        console.error('删除谱线失败:', e);
+      }
     }
   </script>
 </body>

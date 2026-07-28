@@ -196,6 +196,31 @@ class sptmChart {
   }
 
   /**
+   * 根据频率查找最近的真实频率索引和对应的真实频率值
+   * @param {Object} dataInfo - 数据信息对象
+   * @param {number} freq - 目标频率
+   * @param {Object} [labelInfo] - 标签网格信息（等间隔计算索引时使用）
+   * @returns {Object} {index: 数据索引, realFreq: 真实频率}
+   * @private
+   */
+  _findNearestFreqIndex(dataInfo, freq, labelInfo){
+    if(dataInfo._freqs && dataInfo._freqs.length > 0){
+      let minDiff = Infinity, nearestIdx = 0;
+      for(let k = 0; k < dataInfo._freqs.length; k++){
+        let diff = Math.abs(dataInfo._freqs[k] - freq);
+        if(diff < minDiff){ minDiff = diff; nearestIdx = k; }
+      }
+      return { index: nearestIdx, realFreq: dataInfo._freqs[nearestIdx] };
+    }
+    // 没有真实频率时，基于等间隔计算索引
+    let startFreq = labelInfo ? labelInfo.start_freq : dataInfo.start_freq;
+    let endFreq = labelInfo ? labelInfo.end_freq : dataInfo.end_freq;
+    const ratio = (freq - startFreq) / (endFreq - startFreq);
+    const index = Math.round(ratio * (dataInfo.data.length - 1));
+    return { index: index, realFreq: freq };
+  }
+
+  /**
    * 绘制选框
    * @private
    */
@@ -315,6 +340,7 @@ class sptmChart {
     const traceLevels=[];
     let targetY=null;
     let targetTraceIndex = -1;  // 目标谱线索引
+    let realFreqValue = freq;   // 跟踪真实频率
     
     // 获取 Marker 跟随的谱线 ID
     const followTraceId = marker.getTraceId() || 0;
@@ -334,8 +360,13 @@ class sptmChart {
         const dataInfo=trace.datainfo[j];
         if(!dataInfo||!dataInfo.data)continue;
         
-        const ratio=(freq-info.start_freq)/(info.end_freq-info.start_freq);
-        const index=Math.round(ratio*(dataInfo.data.length-1));
+        // 优先使用真实频率
+        let realFreq = freq;
+        let index;
+        const nearestResult = this._findNearestFreqIndex(dataInfo, freq, info);
+        index = nearestResult.index;
+        realFreq = nearestResult.realFreq;
+        realFreqValue = realFreq;
         
         if(index>=0&&index<dataInfo.data.length){
           const level=dataInfo.data[index];
@@ -363,11 +394,11 @@ class sptmChart {
       }
     }
     
-    marker.setFrequency(freq);
+    marker.setFrequency(realFreqValue);
     
     //构建标牌文本
     const scutchonList=[];
-    const freqMHz=(freq/1000000).toFixed(6);
+    const freqMHz=(realFreqValue/1000000).toFixed(6);
     scutchonList.push([{text:`频率：${freqMHz} MHz`,format:''}]);
     
     // 如果有目标谱线，将其移到最前面
@@ -412,6 +443,7 @@ class sptmChart {
     const traceLevels=[];
     let targetY=null;
     let targetTraceIndex = -1;  // 目标谱线索引
+    let realFreqValue = freq;   // 跟踪真实频率
     
     // 获取 Marker 跟随的谱线 ID
     const followTraceId = marker.getTraceId() || 0;
@@ -428,8 +460,13 @@ class sptmChart {
         const dataInfo=trace.datainfo[j];
         if(!dataInfo||!dataInfo.data)continue;
         
-        const ratio=(freq-info.start_freq)/(info.end_freq-info.start_freq);
-        const index=Math.round(ratio*(dataInfo.data.length-1));
+        // 优先使用真实频率
+        let realFreq = freq;
+        let index;
+        const nearestResult = this._findNearestFreqIndex(dataInfo, freq, info);
+        index = nearestResult.index;
+        realFreq = nearestResult.realFreq;
+        realFreqValue = realFreq;
         
         if(index>=0&&index<dataInfo.data.length){
           const level=dataInfo.data[index];
@@ -461,11 +498,11 @@ class sptmChart {
       }
     }
     
-    marker.setFrequency(freq);
+    marker.setFrequency(realFreqValue);
     
     //构建标牌文本
     const scutchonList=[];
-    const freqMHz=(freq/1000000).toFixed(6);
+    const freqMHz=(realFreqValue/1000000).toFixed(6);
     scutchonList.push([{text:`频率：${freqMHz} MHz`,format:''}]);
     
     // 如果有目标谱线，将其移到最前面
@@ -1644,6 +1681,10 @@ class sptmChart {
       let startOrder=Math.floor((labelInfo.show_start_freq-labelInfo.start_freq)*data.point/(labelInfo.end_freq-labelInfo.start_freq));
       let endOrder=Math.floor((labelInfo.show_end_freq-labelInfo.start_freq)*data.point/(labelInfo.end_freq-labelInfo.start_freq));
       data.drawData=data.data.slice(startOrder,endOrder);
+      // 同步截取 _freqs
+      if(data._freqs&&data._freqs.length>0){
+        data._freqs=data._freqs.slice(startOrder,endOrder);
+      }
     }
     
     //数据抽点处理
@@ -1651,6 +1692,16 @@ class sptmChart {
       data.lineType='pointline';
       let pointdata=extractTwoPolesTraceLine(data.data,data.data.length,drawWidth);
       data.drawData=pointdata;
+      // 如果有真实频率，根据抽点索引提取对应的频率
+      if(data._freqs&&data._freqs.length>0){
+        let freqTargetData=[];
+        for(let i=0;i<pointdata.dataIndex.length;i++){
+          let maxIdx=pointdata.dataIndex[i][0];
+          let minIdx=pointdata.dataIndex[i][1];
+          freqTargetData.push([data._freqs[maxIdx],data._freqs[minIdx]]);
+        }
+        data._freqs=freqTargetData;
+      }
     }else if(data.drawData.length===drawWidth){
       data.lineType='line';
       data.drawData=data.data;
@@ -1694,7 +1745,12 @@ class sptmChart {
         let point = linedata[i];
         let startPointPx=labelInfo.start_x;
         let startx=this.options.grid.left+startPointPx;
-        let x = startx + i * drawStepPx;
+        let x;
+        if(data._freqs&&data._freqs.length>0){
+          x = startx + (data._freqs[i]-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*labelInfo.width;
+        }else{
+          x = startx + i * drawStepPx;
+        }
         let rightBoundary = this.width - this.options.grid.right;
         let leftBoundary = this.options.grid.left;
         let epsilon = 0.5;
@@ -1713,8 +1769,17 @@ class sptmChart {
         let point = data.drawData[j];
         let startPointPx=labelInfo.start_x;
         let startx=this.options.grid.left+startPointPx;
-        let x1 = startx + j * drawStepPx-drawStepPx/2;
-        let x2 = startx+ j * drawStepPx+drawStepPx/2;
+        let x1, x2;
+        if(data._freqs&&data._freqs.length>0){
+          let centerX = startx + (data._freqs[j]-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*labelInfo.width;
+          let prevX = j>0 ? startx + (data._freqs[j-1]-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*labelInfo.width : startx;
+          let nextX = j<data._freqs.length-1 ? startx + (data._freqs[j+1]-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*labelInfo.width : startx + labelInfo.width;
+          x1 = centerX - (nextX - prevX) / 4;
+          x2 = centerX + (nextX - prevX) / 4;
+        }else{
+          x1 = startx + j * drawStepPx-drawStepPx/2;
+          x2 = startx+ j * drawStepPx+drawStepPx/2;
+        }
         if(x1<this.options.grid.left)x1=this.options.grid.left;
         if(x2>this.width-this.options.grid.right)x2=this.width-this.options.grid.right;
         let y = this.height - this.options.grid.bottom - ((point - this.options.yaxis.min_value) /(this.options.yaxis.max_value - this.options.yaxis.min_value)) * this.chartHeight;
@@ -1732,7 +1797,13 @@ class sptmChart {
         let minpoint = linedata[i][1];
         let startPointPx=labelInfo.start_x;
         let startx=this.options.grid.left+startPointPx;
-        let x = startx+ i * drawStepPx;
+        let x;
+        if(data._freqs&&Array.isArray(data._freqs[i])){
+          let avgFreq=(data._freqs[i][0]+data._freqs[i][1])/2;
+          x=startx+(avgFreq-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*labelInfo.width;
+        }else{
+          x = startx+ i * drawStepPx;
+        }
         let rightBoundary = this.width - this.options.grid.right;
         let leftBoundary = this.options.grid.left;
         let epsilon = 0.5;
@@ -1827,6 +1898,15 @@ class sptmChart {
           this._draw();
           return;
         } else {
+          // 解析 freq_data（如果存在）
+          if (Array.isArray(data)) {
+            for (let d of data) {
+              if (d.freq_data && Array.isArray(d.freq_data) && d.freq_data.length > 0) {
+                d._freqs = [...d.freq_data];
+                d._hasRealFreq = true;
+              }
+            }
+          }
           this.tracesData[i].datainfo=data;
         }
         break;
@@ -1850,6 +1930,39 @@ class sptmChart {
     }
     this.isDraw=true;
     this._draw();
+  }
+
+  /**
+   * 设置谱线可见（正确拼写）
+   * @param {number} id - 谱线id
+   * @param {boolean} visible - 是否可见
+   */
+  setTraceVisibility(id,visible){
+    this.setTranceVisible(id,visible);
+  }
+
+  /**
+   * 获取谱线列表
+   * @returns {Array} 谱线数据副本
+   */
+  getTraces(){
+    return this.tracesData.map(t => ({ ...t }));
+  }
+
+  /**
+   * 删除指定谱线
+   * @param {number} id - 谱线id
+   * @returns {boolean} 是否删除成功
+   */
+  removeTrace(id){
+    const idx = this.tracesData.findIndex(t => t.id === id);
+    if (idx > -1) {
+      this.tracesData.splice(idx, 1);
+      this.isDraw=true;
+      this._draw();
+      return true;
+    }
+    return false;
   }
   /**
    * 计算标签
@@ -2322,6 +2435,53 @@ class sptmChart {
       this._throttledScheduleDraw();
     }
     
+    // 鼠标移动时打印频率和强度信息
+    if(type=="grid"||type=="bottom"){
+      let mouseVal=this.getMouseVal(event,2);
+      if(mouseVal.x!==null){
+        let realFreq=mouseVal.x;
+        let intensity=null;
+        let sourceInfo=[];
+        // 查找真实频率和强度
+        if(this.tracesData.length>0){
+          for(let i=0;i<this.tracesData.length;i++){
+            const trace=this.tracesData[i];
+            if(!trace.visible||!trace.datainfo)continue;
+            for(let j=0;j<trace.datainfo.length;j++){
+              const dataInfo=trace.datainfo[j];
+              if(!dataInfo||!dataInfo.data)continue;
+              // 只处理鼠标当前所在频段范围内的数据段
+              if(mouseVal.x < dataInfo.start_freq || mouseVal.x > dataInfo.end_freq) continue;
+              const nearestResult = this._findNearestFreqIndex(dataInfo, mouseVal.x);
+              realFreq = nearestResult.realFreq;
+              if(nearestResult.index>=0 && nearestResult.index<dataInfo.data.length){
+                intensity=dataInfo.data[nearestResult.index];
+              }
+              // 记录源数据信息
+              const freqOffset = realFreq - mouseVal.x;
+              sourceInfo.push({
+                traceName: trace.name || `谱线${trace.id}`,
+                hasRealFreq: dataInfo._freqs && dataInfo._freqs.length > 0,
+                nearestIdx: nearestResult.index,
+                xAxisFreq: `${(mouseVal.x/1e6).toFixed(6)} MHz`,
+                realFreq: `${(realFreq/1e6).toFixed(6)} MHz`,
+                freqOffset: `${(freqOffset/1e3).toFixed(3)} kHz`,
+                intensity: intensity !== null ? `${intensity.toFixed(2)} dBμV` : 'N/A',
+                freqRange: dataInfo._freqs && dataInfo._freqs.length > 0 
+                  ? `${(Math.min(...dataInfo._freqs)/1e6).toFixed(3)}~${(Math.max(...dataInfo._freqs)/1e6).toFixed(3)} MHz` 
+                  : undefined
+              });
+            }
+          }
+        }
+        this._mouseRealFreq = realFreq;
+        console.log(`[MouseMove] X轴频率: ${(mouseVal.x/1000000).toFixed(6)} MHz, 真实频率: ${(realFreq/1000000).toFixed(6)} MHz, 强度: ${intensity!==null?intensity.toFixed(2):'--'} dBμV`);
+        if(sourceInfo.length>0){
+          console.table(sourceInfo);
+        }
+      }
+    }
+    
     // 直接修改属性，避免每帧mousemove都创建新对象
     this.moveInfo.isMove = true;
     this.moveInfo.preX = event.offsetX;
@@ -2777,9 +2937,16 @@ class sptmChart {
     
     // 构建文本内容
     const lines = [];
+    // 真实频率显示（如果有）
+    const hasRealFreq = this._mouseRealFreq !== undefined && this._mouseRealFreq !== null && Math.abs(this._mouseRealFreq - data.x) > 0.1;
     if(tipConfig.freq_visible){
       lines.push(`强度：${centtext}${this.options.yaxis.unit}`);
       lines.push(`频率：${(data.x/1000000).toFixed(6)} MHz`);
+      // if(hasRealFreq){
+      //   const freqOffset = this._mouseRealFreq - data.x;
+      //   lines.push(`真实频率：${(this._mouseRealFreq/1000000).toFixed(6)} MHz`);
+      //   lines.push(`频偏：${(freqOffset/1000).toFixed(3)} kHz`);
+      // }
     }else{
       lines.push(`强度：${centtext}${this.options.yaxis.unit}`);
     }
@@ -3167,14 +3334,37 @@ class sptmChart {
       pointy: event.offsetY
     });
     
+    let rawFreq = mouseVal.x;
+    
+    // 优先使用真实频率
+    if(this.tracesData.length>0 && rawFreq!==null){
+      for(let i=0;i<this.tracesData.length;i++){
+        const trace=this.tracesData[i];
+        if(!trace.visible||!trace.datainfo)continue;
+        for(let j=0;j<trace.datainfo.length;j++){
+          const dataInfo=trace.datainfo[j];
+          if(dataInfo._freqs && dataInfo._freqs.length>0){
+            let minDiff=Infinity,nearestIdx=0;
+            for(let k=0;k<dataInfo._freqs.length;k++){
+              let diff=Math.abs(dataInfo._freqs[k]-rawFreq);
+              if(diff<minDiff){minDiff=diff;nearestIdx=k;}
+            }
+            rawFreq=dataInfo._freqs[nearestIdx];
+            break;
+          }
+        }
+        if(rawFreq!==mouseVal.x)break;
+      }
+    }
+    
     return {
-      x: mouseVal.x,
+      x: rawFreq,
       y: mouseVal.y,
-      freq: mouseVal.x ? (mouseVal.x / 1000000).toFixed(6) + ' MHz' : '--',
+      freq: rawFreq ? (rawFreq / 1000000).toFixed(6) + ' MHz' : '--',
       level: mouseLevel.y && mouseLevel.y.length > 0 
         ? Math.max(...mouseLevel.y).toFixed(2) + ' ' + (this.options.yaxis.unit || 'dBμV')
         : '--',
-      rawFreq: mouseVal.x,
+      rawFreq: rawFreq,
       rawLevel: mouseLevel.y && mouseLevel.y.length > 0 ? Math.max(...mouseLevel.y) : null
     };
   }
