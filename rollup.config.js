@@ -4,6 +4,10 @@ import { terser } from 'rollup-plugin-terser';
 import postcss from 'rollup-plugin-postcss';
 import commonjs from '@rollup/plugin-commonjs';
 import typescript from '@rollup/plugin-typescript';
+import serve from 'rollup-plugin-serve';
+
+const isDev = process.env.NODE_ENV === 'development';
+
 export default {
   input: 'src/index.js',
   output: [
@@ -31,7 +35,10 @@ export default {
     //typescript(), // 处理 TypeScript 文件
     terser({
       compress: {
-        drop_console: true,   // 移除所有的 console.log() 和其他 console.* 语句
+        drop_console: false,   // 移除所有的 console.log() 和其他 console.* 语句
+      },
+      format: {
+        comments: false,      // 删除所有注释，包括中文注释
       },
     }),// 压缩代码
     postcss({  // 处理 CSS 文件
@@ -42,7 +49,14 @@ export default {
         exclude: 'node_modules/**',  // 不转换 node_modules 中的代码
         presets: ['@babel/preset-env'], // 使用 @babel/preset-env 转译为 ES5
         babelHelpers: 'bundled' // 确保 Babel helpers 被正确处理
-    }) 
+    }),
+    isDev && serve({
+      open: true,
+      openPage: '/index.html',
+      contentBase: ['examples', '.'],
+      port: 8080,
+      historyApiFallback: '/index.html',
+    })
   ],
   external: []// 外部依赖
 };

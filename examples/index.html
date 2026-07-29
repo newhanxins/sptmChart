@@ -195,6 +195,7 @@
 
   <p>
     <button onclick="changeProperty()">更改门限属性</button>
+    <button onclick="changeYAxisProperty()">更改y轴属性</button>
     <button onclick="changeOptions()">更改属性</button>
     <button onclick="getOptions()">获取属性</button>
     <button onclick="stop()">停止</button>
@@ -248,6 +249,9 @@
             }
           ],
           "dscan_space": 10,
+          "onXRangeChange": function(info,event) {
+            console.log("X轴范围变化", info);
+          },
         },
         "yaxis": {
           "width": 1,
@@ -259,6 +263,9 @@
           "floor_value": -20,
           "ceiling_value": 100,
           "decimals": 2,
+          "onYRangeChange": function(info,event) {
+            console.log("Y轴范围变化", info);
+          },
         },
         "legend": {
           "visible": true,
@@ -705,7 +712,17 @@
         "is_darg": true,
       });
     }
-
+    function changeYAxisProperty() {
+      sptmCharts.setOptions({
+        "yaxis": {
+          "min_value": -20,
+          "max_value": 20,
+          "floor_value": -20,
+          "ceiling_value": 200
+        }
+      });
+    }
+    
     function changeOptions() {
       let options = {
         "xaxis": {

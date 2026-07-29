@@ -92,9 +92,9 @@ class sptmChart {
     this._boundResizeHandler = debounce(() => {
       this.resizeCanvas();
     }, 200);
-    // 节流处理：限制重绘频率
-    this._throttledScheduleDraw = throttle(() => this._scheduleDraw(), 100);
-    this._throttledHandleZoom = throttle((event, delta) => this._handleZoom(event, delta), 100);
+    // 节流处理：限制重绘频率（16ms ≈ 60FPS，保证流畅度）
+    this._throttledScheduleDraw = throttle(() => this._scheduleDraw(), 16);
+    this._throttledHandleZoom = throttle((event, delta) => this._handleZoom(event, delta), 16);
 
     this.canvas.addEventListener('mousedown', this._boundHandleMousedown);
     this.canvas.addEventListener('mouseup', this._boundHandleMouseup);
@@ -134,6 +134,9 @@ class sptmChart {
       moveX:0,
       moveY:0
     }
+    // 鼠标移动像素级脏检查
+    this._lastMouseX = -1;
+    this._lastMouseY = -1;
     //选框功能状态
     this._selectionBox={
       active:false,
@@ -196,6 +199,109 @@ class sptmChart {
   }
 
   /**
+   * 绘制圆角矩形路径
+   * @param {CanvasRenderingContext2D} ctx - Canvas上下文
+   * @param {number} x - 左上角X坐标
+   * @param {number} y - 左上角Y坐标
+   * @param {number} width - 矩形宽度
+   * @param {number} height - 矩形高度
+   * @param {number} radius - 圆角半径
+   * @private
+   */
+  _drawRoundRect(ctx, x, y, width, height, radius){
+    const r = Math.min(radius, width / 2, height / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + width - r, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+    ctx.lineTo(x + width, y + height - r);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+    ctx.lineTo(x + r, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  /**
+   * 绘制信息提示框（通用）
+   * @param {CanvasRenderingContext2D} ctx - Canvas上下文
+   * @param {Object} config - 配置对象
+   * @param {Array<string>} config.lines - 文本行数组
+   * @param {string} config.position - 位置枚举 'top-left'|'top-center'|'top-right'|'bottom-left'|'bottom-center'|'bottom-right'
+   * @param {number} config.offsetX - X方向偏移（像素，会被DPR缩放）
+   * @param {number} config.offsetY - Y方向偏移（像素，会被DPR缩放）
+   * @param {number} config.padding - 内边距（像素，会被DPR缩放）
+   * @param {number} config.fontSize - 字体大小（像素，会被DPR缩放）
+   * @param {number} config.borderRadius - 圆角半径（像素，会被DPR缩放）
+   * @param {string} config.background - 背景色
+   * @param {string} config.textColor - 文本颜色
+   * @private
+   */
+  _drawInfoBox(ctx, config) {
+    const { lines, position, offsetX, offsetY, padding, fontSize, borderRadius, background, textColor } = config;
+    const scaledPadding = padding * this.devicePixelRatio;
+    const scaledFontSize = fontSize * this.devicePixelRatio;
+    const scaledBorderRadius = borderRadius * this.devicePixelRatio;
+
+    // 计算文本框大小
+    const {width: boxWidth, height: boxHeight, lineHeight} = this._measureTextBox(lines, scaledFontSize, scaledPadding);
+
+    // 计算位置
+    let boxX, boxY;
+    const baseOffsetX = offsetX * this.devicePixelRatio;
+    const baseOffsetY = offsetY * this.devicePixelRatio;
+
+    switch (position) {
+      case 'top-left':
+        boxX = baseOffsetX;
+        boxY = baseOffsetY;
+        break;
+      case "top-center":
+        boxX = (this.width - boxWidth) / 2 + baseOffsetX;
+        boxY = baseOffsetY;
+        break;
+      case "top-right":
+        boxX = this.width - boxWidth + baseOffsetX;
+        boxY = baseOffsetY;
+        break;
+      case "bottom-left":
+        boxX = baseOffsetX;
+        boxY = this.height - boxHeight + baseOffsetY;
+        break;
+      case "bottom-center":
+        boxX = (this.width - boxWidth) / 2 + baseOffsetX;
+        boxY = this.height - boxHeight + baseOffsetY;
+        break;
+      case "bottom-right":
+        boxX = this.width - boxWidth + baseOffsetX;
+        boxY = this.height - boxHeight + baseOffsetY;
+        break;
+      default:
+        boxX = (this.width - boxWidth) / 2;
+        boxY = baseOffsetY;
+    }
+
+    // 绘制背景
+    ctx.save();
+    ctx.fillStyle = background;
+    this._drawRoundRect(ctx, boxX, boxY, boxWidth, boxHeight, scaledBorderRadius);
+    ctx.fill();
+
+    // 绘制文本
+    ctx.fillStyle = textColor;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+
+    for (let i = 0; i < lines.length; i++) {
+      const textY = boxY + scaledPadding + i * lineHeight;
+      ctx.fillText(lines[i], boxX + scaledPadding, textY);
+    }
+
+    ctx.restore();
+  }
+
+  /**
    * 根据频率查找最近的真实频率索引和对应的真实频率值
    * @param {Object} dataInfo - 数据信息对象
    * @param {number} freq - 目标频率
@@ -203,14 +309,132 @@ class sptmChart {
    * @returns {Object} {index: 数据索引, realFreq: 真实频率}
    * @private
    */
+  /**
+   * 测量文本框尺寸
+   * @param {Array<string>} lines - 文本行数组
+   * @param {number} fontSize - 字体大小（已缩放DPR）
+   * @param {number} padding - 内边距（已缩放DPR）
+   * @returns {Object} {width, height, lineHeight}
+   * @private
+   */
+  _measureTextBox(lines, fontSize, padding){
+    this.ctx.font = `${fontSize}px Arial`;
+    let maxWidth = 0;
+    for(const line of lines){
+      const metrics = this.ctx.measureText(line);
+      if(metrics.width > maxWidth) maxWidth = metrics.width;
+    }
+    const lineHeight = fontSize * 1.4;
+    return {
+      width: maxWidth + padding * 2,
+      height: lines.length * lineHeight + padding * 2,
+      lineHeight
+    };
+  }
+
+  /**
+   * 边界约束：将box限制在指定矩形范围内
+   * @param {Object} box - 待约束的矩形 {x, y, width, height}
+   * @param {Object} container - 容器矩形 {x, y, width, height}
+   * @param {number} margin - 边距
+   * @returns {Object} 约束后的矩形
+   * @private
+   */
+  _clampBoxPosition(box, container, margin = 10){
+    let x = box.x;
+    let y = box.y;
+    const containerRight = container.x + container.width;
+    const containerBottom = container.y + container.height;
+    
+    // 右侧超出
+    if (x + box.width > containerRight - margin) {
+      x = containerRight - margin - box.width;
+    }
+    // 下方超出
+    if (y + box.height > containerBottom - margin) {
+      y = containerBottom - margin - box.height;
+    }
+    // 左侧超出
+    if (x < container.x + margin) {
+      x = container.x + margin;
+    }
+    // 上方超出
+    if (y < container.y + margin) {
+      y = container.y + margin;
+    }
+    return { x, y, width: box.width, height: box.height };
+  }
+
+  /**
+   * 触发X轴范围变化回调
+   * @param {string} type - 'zoom' | 'pan'
+   * @param {string} source - 'wheel' | 'drag' | 'touch'
+   * @param {number} order - 多段索引
+   * @param {number} [startFreqOverride] - 强制使用的起始频率
+   * @param {number} [endFreqOverride] - 强制使用的结束频率
+   * @private
+   */
+  _triggerXRangeChange(type, source, order, startFreqOverride, endFreqOverride) {
+    if (typeof this.options.xaxis.onXRangeChange !== 'function') return;
+    const labelInfo = this.xLabelGridInfo[order];
+    if (!labelInfo) return;
+    const startFreq = startFreqOverride !== undefined ? startFreqOverride : labelInfo.show_start_freq;
+    const endFreq = endFreqOverride !== undefined ? endFreqOverride : labelInfo.show_end_freq;
+    const span = endFreq - startFreq;
+    this.options.xaxis.onXRangeChange({
+      type,                           // 操作类型: 'zoom'(缩放) | 'pan'(平移)
+      source,                         // 触发来源: 'wheel'(滚轮) | 'drag'(拖动) | 'touch'(触控)
+      order,                          // 多段索引(DScan多段场景)
+      startFreq,                      // 当前显示起始频率(Hz)
+      endFreq,                        // 当前显示结束频率(Hz)
+      centerFreq: startFreq + Math.floor(span / 2),  // 中心频率(Hz)
+      span,                           // 当前显示带宽/显宽(Hz)
+      drawZoom: labelInfo.draw_zoom || 1,             // 当前缩放倍数
+      startX: labelInfo.start_x,     // 段起始像素坐标
+      endX: labelInfo.end_x,         // 段结束像素坐标
+      bandStartFreq: labelInfo.start_freq,  // 原始频段起始频率(Hz)
+      bandEndFreq: labelInfo.end_freq       // 原始频段结束频率(Hz)
+    });
+  }
+
+  /**
+   * 触发Y轴范围变化回调
+   * @param {string} type - 'zoom' | 'pan'
+   * @param {string} source - 'wheel' | 'drag' | 'touch'
+   * @private
+   */
+  _triggerYRangeChange(type, source) {
+    if (typeof this.options.yaxis.onYRangeChange !== 'function') return;
+    const minValue = this.options.yaxis.min_value;
+    const maxValue = this.options.yaxis.max_value;
+    const span = maxValue - minValue;
+    this.options.yaxis.onYRangeChange({
+      type,                           // 操作类型: 'zoom'(缩放) | 'pan'(平移)
+      source,                         // 触发来源: 'wheel'(滚轮) | 'drag'(拖动) | 'touch'(触控)
+      minValue,                       // 当前Y轴最小值
+      maxValue,                       // 当前Y轴最大值
+      centerValue: minValue + span / 2,  // 中心值
+      span,                           // 范围跨度
+      zoomLevel: this.yZoom          // 当前缩放级别
+    });
+  }
+
   _findNearestFreqIndex(dataInfo, freq, labelInfo){
     if(dataInfo._freqs && dataInfo._freqs.length > 0){
-      let minDiff = Infinity, nearestIdx = 0;
-      for(let k = 0; k < dataInfo._freqs.length; k++){
-        let diff = Math.abs(dataInfo._freqs[k] - freq);
-        if(diff < minDiff){ minDiff = diff; nearestIdx = k; }
+      const arr = dataInfo._freqs;
+      let left = 0, right = arr.length - 1;
+      // 二分查找确定目标频率所在区间
+      while (left < right) {
+        const mid = (left + right) >> 1;
+        if (arr[mid] < freq) left = mid + 1;
+        else right = mid;
       }
-      return { index: nearestIdx, realFreq: dataInfo._freqs[nearestIdx] };
+      // 比较左右邻近点，返回最近的索引
+      let nearestIdx = left;
+      if (left > 0 && Math.abs(arr[left - 1] - freq) < Math.abs(arr[left] - freq)) {
+        nearestIdx = left - 1;
+      }
+      return { index: nearestIdx, realFreq: arr[nearestIdx] };
     }
     // 没有真实频率时，基于等间隔计算索引
     let startFreq = labelInfo ? labelInfo.start_freq : dataInfo.start_freq;
@@ -326,111 +550,8 @@ class sptmChart {
       marker.setRect(sceneRect);
     });
   }
-  
-    /**
-   * 更新 Marker 数据
-   * @private
-   */
-  _updateMarkerDatas(marker){
-    const pt=marker.markerPt();
-    const freq=this._xToFreq(pt.x);
-    
-    if(freq===null)return;
-    
-    const traceLevels=[];
-    let targetY=null;
-    let targetTraceIndex = -1;  // 目标谱线索引
-    let realFreqValue = freq;   // 跟踪真实频率
-    
-    // 获取 Marker 跟随的谱线 ID
-    const followTraceId = marker.getTraceId() || 0;
-    
-    // 第一次遍历：找到目标谱线的数据
-    for(let i=0;i<this.tracesData.length;i++){
-      const trace=this.tracesData[i];
-      if(!trace.visible||!trace.datainfo)continue;
-      
-      // 如果指定了谱线 ID，只处理该谱线
-      //if(followTraceId > 0 && trace.id !== followTraceId)continue;
-      
-      for(let j=0;j<this.xLabelGridInfo.length;j++){
-        const info=this.xLabelGridInfo[j];
-        if(freq<info.show_start_freq||freq>info.show_end_freq)continue;
-        
-        const dataInfo=trace.datainfo[j];
-        if(!dataInfo||!dataInfo.data)continue;
-        
-        // 优先使用真实频率
-        let realFreq = freq;
-        let index;
-        const nearestResult = this._findNearestFreqIndex(dataInfo, freq, info);
-        index = nearestResult.index;
-        realFreq = nearestResult.realFreq;
-        realFreqValue = realFreq;
-        
-        if(index>=0&&index<dataInfo.data.length){
-          const level=dataInfo.data[index];
-          const traceInfo = {
-            name:trace.name||`谱线${i+1}`,
-            level:level,
-            unit:this.options.yaxis.unit||'dBμV',
-            traceId: trace.id,
-            originalIndex: i  // 原始索引
-          };
-          
-          // 如果是指定谱线，记录为目标谱线
-          if(followTraceId > 0 && trace.id === followTraceId){
-            targetTraceIndex = traceLevels.length;
-          }
-          
-          traceLevels.push(traceInfo);
-          
-          // 计算谱线 Y 轴坐标
-          if(targetY===null && marker.isFollowTraceY()){
-            const yPixel=this.height - this.options.grid.bottom - ((level - this.options.yaxis.min_value) /(this.options.yaxis.max_value - this.options.yaxis.min_value)) * this.chartHeight;
-            targetY=yPixel+marker.getTraceYOffset();
-          }
-        }
-      }
-    }
-    
-    marker.setFrequency(realFreqValue);
-    
-    //构建标牌文本
-    const scutchonList=[];
-    const freqMHz=(realFreqValue/1000000).toFixed(6);
-    scutchonList.push([{text:`频率：${freqMHz} MHz`,format:''}]);
-    
-    // 如果有目标谱线，将其移到最前面
-    if(targetTraceIndex >= 0 && targetTraceIndex < traceLevels.length){
-      const targetTrace = traceLevels[targetTraceIndex];
-      // 将目标谱线移到数组第一位
-      traceLevels.unshift(traceLevels.splice(targetTraceIndex, 1)[0]);
-    }
-    
-    // 构建标牌内容
-    traceLevels.forEach((trace,index)=>{
-      const levelText=trace.level!==undefined?trace.level.toFixed(2):'--';
-      const lineText = `${trace.name}: ${levelText} ${trace.unit}`;
-      
-      scutchonList.push([{
-        text:lineText,
-        format:''
-      }]);
-    });
-    
-    marker.setScutchonList(scutchonList);
-    
-    // 如果跟随谱线 Y 轴位置，更新 Marker 的 Y 坐标
-    if(targetY!==null && marker.isFollowTraceY()){
-      const currentPt=marker.markerPt();
-      if(currentPt.y!==targetY){
-        marker.setMarkerPt({x:currentPt.x,y:targetY});
-      }
-    }
-  }
 
-    /**
+  /**
    * 更新 Marker 数据
    * @private
    */
@@ -773,6 +894,8 @@ class sptmChart {
         "label_angle":0,//*X 轴刻度标签角度
         "draw_zoom_freq":"",//*X 轴绘制缩放基准频率
         "draw_zoom_span":"",//*X 轴绘制缩放基准显宽
+        "onXRangeChange": null,         // X轴范围变化回调 function({type, source, order, startFreq, endFreq, centerFreq, span, drawZoom, startX, endX})
+      
       },
       "yaxis":{ //Y 轴样式
         "number": 5,//Y 轴网格线数量
@@ -793,6 +916,7 @@ class sptmChart {
         "axis_function":function(value){
           return value
         },//Y 轴刻度值计算函数
+        "onYRangeChange": null,          // Y轴范围变化回调 function({type, source, minValue, maxValue, centerValue, span, zoomLevel})
         "zoom_value": "",//*Y 轴缩放基准值
         "labels":[],//*Y 轴刻度标签
       },
@@ -945,7 +1069,7 @@ class sptmChart {
         "minWidth": 5,                 // 触发选框的最小宽度（像素）
         "longPressDelay": 200,         // 长按触发选框的延迟（毫秒）
         "onSelect": null               // 选框结束回调 function({startFreq, endFreq, centerFreq, bandwidth, startX, endX})
-      }
+      },
     }
     const mergedOptions = deepMerge({}, defaultOptions);
     this.options = deepMerge(mergedOptions,options);
@@ -1389,9 +1513,6 @@ class sptmChart {
     if(!this.options.centerinfo.visible)return;
     
     const info = this.options.centerinfo;
-    const padding = info.padding * this.devicePixelRatio;
-    const fontSize = info.font_size * this.devicePixelRatio;
-    const lineHeight = fontSize * 1.4;
     
     // 构建显示内容
     const lines = [];
@@ -1428,83 +1549,17 @@ class sptmChart {
     
     if(lines.length === 0)return;
     
-    // 计算文本框大小
-    this.ctx.font = `${fontSize}px Arial`;
-    let maxWidth = 0;
-    for(const line of lines){
-      const metrics = this.ctx.measureText(line);
-      if(metrics.width > maxWidth)maxWidth = metrics.width;
-    }
-    
-    const boxWidth = maxWidth + padding * 2;
-    const boxHeight = lines.length * lineHeight + padding * 2;
-    const borderRadius = info.border_radius * this.devicePixelRatio;
-    
-    // 计算位置
-    let boxX, boxY;
-    const baseOffsetX = info.offsetX * this.devicePixelRatio;
-    const baseOffsetY = info.offsetY * this.devicePixelRatio;
-    
-    switch(info.position){
-      case 'top-left':
-        boxX = baseOffsetX;
-        boxY = baseOffsetY;
-        break;
-      case 'top-center':
-        boxX = (this.width - boxWidth) / 2 + baseOffsetX;
-        boxY = baseOffsetY;
-        break;
-      case 'top-right':
-        boxX = this.width - boxWidth + baseOffsetX;
-        boxY = baseOffsetY;
-        break;
-      case 'bottom-left':
-        boxX = baseOffsetX;
-        boxY = this.height - boxHeight + baseOffsetY;
-        break;
-      case 'bottom-center':
-        boxX = (this.width - boxWidth) / 2 + baseOffsetX;
-        boxY = this.height - boxHeight + baseOffsetY;
-        break;
-      case 'bottom-right':
-        boxX = this.width - boxWidth + baseOffsetX;
-        boxY = this.height - boxHeight + baseOffsetY;
-        break;
-      default:
-        boxX = (this.width - boxWidth) / 2;
-        boxY = baseOffsetY;
-    }
-    
-    // 绘制背景
-    this.ctx.save();
-    this.ctx.fillStyle = info.background;
-    
-    // 绘制圆角矩形
-    const r = borderRadius;
-    this.ctx.beginPath();
-    this.ctx.moveTo(boxX + r, boxY);
-    this.ctx.lineTo(boxX + boxWidth - r, boxY);
-    this.ctx.quadraticCurveTo(boxX + boxWidth, boxY, boxX + boxWidth, boxY + r);
-    this.ctx.lineTo(boxX + boxWidth, boxY + boxHeight - r);
-    this.ctx.quadraticCurveTo(boxX + boxWidth, boxY + boxHeight, boxX + boxWidth - r, boxY + boxHeight);
-    this.ctx.lineTo(boxX + r, boxY + boxHeight);
-    this.ctx.quadraticCurveTo(boxX, boxY + boxHeight, boxX, boxY + boxHeight - r);
-    this.ctx.lineTo(boxX, boxY + r);
-    this.ctx.quadraticCurveTo(boxX, boxY, boxX + r, boxY);
-    this.ctx.closePath();
-    this.ctx.fill();
-    
-    // 绘制文本
-    this.ctx.fillStyle = info.text_color;
-    this.ctx.textAlign = 'left';
-    this.ctx.textBaseline = 'top';
-    
-    for(let i=0; i<lines.length; i++){
-      const textY = boxY + padding + i * lineHeight;
-      this.ctx.fillText(lines[i], boxX + padding, textY);
-    }
-    
-    this.ctx.restore();
+    this._drawInfoBox(this.ctx, {
+      lines,
+      position: info.position,
+      offsetX: info.offsetX,
+      offsetY: info.offsetY,
+      padding: info.padding,
+      fontSize: info.font_size,
+      borderRadius: info.border_radius,
+      background: info.background,
+      textColor: info.text_color
+    });
   }
 
   /**
@@ -1515,96 +1570,23 @@ class sptmChart {
     if (this._fpsCurrentValue <= 0) return;
 
     const info = this.options.fps;
-    const padding = info.padding * this.devicePixelRatio;
-    const fontSize = info.font_size * this.devicePixelRatio;
-    const lineHeight = fontSize * 1.4;
+    const lines = [`FPS: ${this._fpsCurrentValue}`];
 
-    // 构建显示内容
-    const lines = [];
-    const modeText = this.options.type === 'DScan' ? 'DScan' : 'FFT';
-    lines.push(`FPS: ${this._fpsCurrentValue}`);
-
-    // 计算文本框大小
-    this.ctx.font = `${fontSize}px Arial`;
-    let maxWidth = 0;
-    for (const line of lines) {
-      const metrics = this.ctx.measureText(line);
-      if (metrics.width > maxWidth) maxWidth = metrics.width;
-    }
-
-    const boxWidth = maxWidth + padding * 2;
-    const boxHeight = lines.length * lineHeight + padding * 2;
-    const borderRadius = info.border_radius * this.devicePixelRatio;
-
-    // 计算位置
-    let boxX, boxY;
-    const baseOffsetX = info.offsetX * this.devicePixelRatio;
-    const baseOffsetY = info.offsetY * this.devicePixelRatio;
-
-    switch (info.position) {
-      case 'top-left':
-        boxX = baseOffsetX;
-        boxY = baseOffsetY;
-        break;
-      case 'top-center':
-        boxX = (this.width - boxWidth) / 2 + baseOffsetX;
-        boxY = baseOffsetY;
-        break;
-      case 'top-right':
-        boxX = this.width - boxWidth + baseOffsetX;
-        boxY = baseOffsetY;
-        break;
-      case 'bottom-left':
-        boxX = baseOffsetX;
-        boxY = this.height - boxHeight + baseOffsetY;
-        break;
-      case 'bottom-center':
-        boxX = (this.width - boxWidth) / 2 + baseOffsetX;
-        boxY = this.height - boxHeight + baseOffsetY;
-        break;
-      case 'bottom-right':
-        boxX = this.width - boxWidth + baseOffsetX;
-        boxY = this.height - boxHeight + baseOffsetY;
-        break;
-      default:
-        boxX = (this.width - boxWidth) / 2;
-        boxY = baseOffsetY;
-    }
-
-    // 绘制背景
-    this.ctx.save();
-    this.ctx.fillStyle = info.background;
-
-    // 绘制圆角矩形
-    const r = borderRadius;
-    this.ctx.beginPath();
-    this.ctx.moveTo(boxX + r, boxY);
-    this.ctx.lineTo(boxX + boxWidth - r, boxY);
-    this.ctx.quadraticCurveTo(boxX + boxWidth, boxY, boxX + boxWidth, boxY + r);
-    this.ctx.lineTo(boxX + boxWidth, boxY + boxHeight - r);
-    this.ctx.quadraticCurveTo(boxX + boxWidth, boxY + boxHeight, boxX + boxWidth - r, boxY + boxHeight);
-    this.ctx.lineTo(boxX + r, boxY + boxHeight);
-    this.ctx.quadraticCurveTo(boxX, boxY + boxHeight, boxX, boxY + boxHeight - r);
-    this.ctx.lineTo(boxX, boxY + r);
-    this.ctx.quadraticCurveTo(boxX, boxY, boxX + r, boxY);
-    this.ctx.closePath();
-    this.ctx.fill();
-
-    // 绘制文本
-    this.ctx.fillStyle = info.text_color;
-    this.ctx.textAlign = 'left';
-    this.ctx.textBaseline = 'top';
-
-    for (let i = 0; i < lines.length; i++) {
-      const textY = boxY + padding + i * lineHeight;
-      this.ctx.fillText(lines[i], boxX + padding, textY);
-    }
-
-    this.ctx.restore();
+    this._drawInfoBox(this.ctx, {
+      lines,
+      position: info.position,
+      offsetX: info.offsetX,
+      offsetY: info.offsetY,
+      padding: info.padding,
+      fontSize: info.font_size,
+      borderRadius: info.border_radius,
+      background: info.background,
+      textColor: info.text_color
+    });
   }
 
   /**
-   *停止绘制
+   * 停止绘制
    */
   stopChart(){
     this.isDraw=false;
@@ -1878,9 +1860,11 @@ class sptmChart {
       if (shouldCount) {
         const now = Date.now();
         this._fpsTimestamps.push(now);
-        // 清理 1 秒前的旧记录（使用 filter 替代 while+shift，避免高频调用时性能问题）
+        // 清理 1 秒前的旧记录（使用 while+shift 避免频繁创建新数组）
         const oneSecondAgo = now - 1000;
-        this._fpsTimestamps = this._fpsTimestamps.filter(t => t >= oneSecondAgo);
+        while (this._fpsTimestamps.length > 0 && this._fpsTimestamps[0] < oneSecondAgo) {
+          this._fpsTimestamps.shift();
+        }
         this._fpsCurrentValue = this._fpsTimestamps.length;
       }
     }
@@ -1957,6 +1941,14 @@ class sptmChart {
   removeTrace(id){
     const idx = this.tracesData.findIndex(t => t.id === id);
     if (idx > -1) {
+      // 释放 datainfo 中的大数组引用，帮助 GC
+      const trace = this.tracesData[idx];
+      if (trace.datainfo) {
+        trace.datainfo.forEach(d => {
+          if (d.data) d.data = null;
+          if (d._freqs) d._freqs = null;
+        });
+      }
       this.tracesData.splice(idx, 1);
       this.isDraw=true;
       this._draw();
@@ -2324,6 +2316,17 @@ class sptmChart {
     // 如果当前是touch交互，且是浏览器自动触发的真实mouse事件，则忽略避免重复
     if(this._isTouchActive && event instanceof MouseEvent)return;
     
+    // 像素级脏检查：仅在非拖动模式下生效，避免高频mousemove造成性能损耗
+    const currentX = Math.round(event.offsetX);
+    const currentY = Math.round(event.offsetY);
+    if(this._currentOperation !== 'markerDrag' && this._currentOperation !== 'selectionBox'){
+      if(this._lastMouseX === currentX && this._lastMouseY === currentY){
+        return;
+      }
+    }
+    this._lastMouseX = currentX;
+    this._lastMouseY = currentY;
+    
     const rect=this.canvas.getBoundingClientRect();
     const point={
       x:event.clientX-rect.left,
@@ -2409,6 +2412,7 @@ class sptmChart {
                 this.xLabelGridInfo[order].draw_zoom_freq=newCenter;
                 this._updateMarkersPositionByFreq();
                 this._scheduleDrawChart();
+                this._triggerXRangeChange('pan', 'drag', order);
               }
             }
           }else{
@@ -2421,6 +2425,7 @@ class sptmChart {
               this.options.yaxis.max_value=maxval;
               this._updateMarkersPositionByFreq();
               this._scheduleDrawChart();
+              this._triggerYRangeChange('pan', 'drag');
             }
           }
         }
@@ -2475,9 +2480,9 @@ class sptmChart {
           }
         }
         this._mouseRealFreq = realFreq;
-        console.log(`[MouseMove] X轴频率: ${(mouseVal.x/1000000).toFixed(6)} MHz, 真实频率: ${(realFreq/1000000).toFixed(6)} MHz, 强度: ${intensity!==null?intensity.toFixed(2):'--'} dBμV`);
+        //console.log(`[MouseMove] X轴频率: ${(mouseVal.x/1000000).toFixed(6)} MHz, 真实频率: ${(realFreq/1000000).toFixed(6)} MHz, 强度: ${intensity!==null?intensity.toFixed(2):'--'} dBμV`);
         if(sourceInfo.length>0){
-          console.table(sourceInfo);
+          //console.table(sourceInfo);
         }
       }
     }
@@ -2952,18 +2957,9 @@ class sptmChart {
     }
     
     // 计算文本框尺寸
-    this.ctx.font = `${tipConfig.tip_font_size * this.devicePixelRatio}px Arial`;
-    let maxWidth = 0;
-    for(const line of lines){
-      const metrics = this.ctx.measureText(line);
-      if(metrics.width > maxWidth) maxWidth = metrics.width;
-    }
-    
     const padding = tipConfig.tip_padding * this.devicePixelRatio;
     const fontSize = tipConfig.tip_font_size * this.devicePixelRatio;
-    const lineHeight = fontSize * 1.4;
-    const boxWidth = maxWidth + padding * 2;
-    const boxHeight = lines.length * lineHeight + padding * 2;
+    const {width: boxWidth, height: boxHeight, lineHeight} = this._measureTextBox(lines, fontSize, padding);
     const borderRadius = tipConfig.tip_border_radius * this.devicePixelRatio;
     
     // 计算提示框位置（参考Marker标牌位置计算方式：先计算默认位置，再边界检测调整）
@@ -2975,51 +2971,19 @@ class sptmChart {
     let boxX = point.pointx + MARGIN;
     let boxY = point.pointy + MARGIN;
     
-    // 边界检测和调整（参考Marker标牌的边界约束逻辑）
-    // 1. 如果右侧超出画布边界，显示在左侧
-    if (boxX + boxWidth > gridRight - MARGIN) {
-      boxX = point.pointx - boxWidth - MARGIN;
-    }
-    
-    // 2. 如果下方超出画布边界，显示在上方
-    if (boxY + boxHeight > gridBottom - MARGIN) {
-      boxY = point.pointy - boxHeight - MARGIN;
-    }
-    
-    // 3. 如果左侧超出画布边界，紧贴左边
-    if (boxX < this.options.grid.left + MARGIN) {
-      boxX = this.options.grid.left + MARGIN;
-    }
-    
-    // 4. 如果上方超出画布边界，紧贴上边
-    if (boxY < this.options.grid.top + MARGIN) {
-      boxY = this.options.grid.top + MARGIN;
-    }
-    
-    // 5. 确保不超出画布绝对边界
-    if (boxX + boxWidth > this.width) {
-      boxX = this.width - boxWidth - MARGIN;
-    }
-    if (boxY + boxHeight > this.height) {
-      boxY = this.height - boxHeight - MARGIN;
-    }
-    if (boxX < MARGIN) boxX = MARGIN;
-    if (boxY < MARGIN) boxY = MARGIN;
+    // 边界约束
+    const clamped = this._clampBoxPosition(
+      { x: boxX, y: boxY, width: boxWidth, height: boxHeight },
+      { x: this.options.grid.left, y: this.options.grid.top, width: this.chartWidth, height: this.chartHeight },
+      MARGIN
+    );
+    boxX = clamped.x;
+    boxY = clamped.y;
     
     // 绘制背景
     this.ctx.save();
     this.ctx.fillStyle = tipConfig.tip_background;
-    this.ctx.beginPath();
-    this.ctx.moveTo(boxX + borderRadius, boxY);
-    this.ctx.lineTo(boxX + boxWidth - borderRadius, boxY);
-    this.ctx.quadraticCurveTo(boxX + boxWidth, boxY, boxX + boxWidth, boxY + borderRadius);
-    this.ctx.lineTo(boxX + boxWidth, boxY + boxHeight - borderRadius);
-    this.ctx.quadraticCurveTo(boxX + boxWidth, boxY + boxHeight, boxX + boxWidth - borderRadius, boxY + boxHeight);
-    this.ctx.lineTo(boxX + borderRadius, boxY + boxHeight);
-    this.ctx.quadraticCurveTo(boxX, boxY + boxHeight, boxX, boxY + boxHeight - borderRadius);
-    this.ctx.lineTo(boxX, boxY + borderRadius);
-    this.ctx.quadraticCurveTo(boxX, boxY, boxX + borderRadius, boxY);
-    this.ctx.closePath();
+    this._drawRoundRect(this.ctx, boxX, boxY, boxWidth, boxHeight, borderRadius);
     this.ctx.fill();
     
     // 绘制文本
@@ -3203,6 +3167,7 @@ class sptmChart {
               this.xLabelGridInfo[order].show_start_freq=minValue;
               this.xLabelGridInfo[order].show_end_freq=maxValue;
               handled = true;
+              this._triggerXRangeChange('zoom', 'wheel', order, minValue, maxValue);
             }
           }
         }
@@ -3243,6 +3208,7 @@ class sptmChart {
         this.options.yaxis.min_value=minValue;
         this.options.yaxis.max_value=maxValue;
         this.yZoom=newZoom;
+        this._triggerYRangeChange('zoom', 'wheel');
       }
     }else if(type=="bottom" || type=="grid"){
       let mouseVal=this.getMouseVal(event,0);
@@ -3270,6 +3236,9 @@ class sptmChart {
           this.xLabelGridInfo[order].draw_zoom = newZoom;
           let newCenter=minValue+Math.floor((maxValue-minValue)/2);
           this.xLabelGridInfo[order].draw_zoom_freq =newCenter;
+          this.xLabelGridInfo[order].show_start_freq=minValue;
+          this.xLabelGridInfo[order].show_end_freq=maxValue;
+          this._triggerXRangeChange('zoom', 'wheel', order);
         }
       }
     }
@@ -4125,8 +4094,13 @@ class sptmChart {
       this.canvas = null;
     }
 
-    // 10. 清空 Marker 列表
+    // 10. 清空 Marker 列表（先清理每个 Marker 的回调引用，避免闭包泄漏）
     if (this._markerList) {
+      this._markerList.forEach(marker => {
+        marker.onFocusChanged = null;
+        marker.onVisibleChanged = null;
+        marker.onMarkerPtChanged = null;
+      });
       this._markerList.clear();
       this._markerList = null;
     }

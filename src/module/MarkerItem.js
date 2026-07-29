@@ -1042,6 +1042,39 @@ class MarkerItem {
     }
 
     /**
+     * 边界约束：将box限制在指定矩形范围内
+     * @param {Object} box - 待约束的矩形 {x, y, width, height}
+     * @param {Object} container - 容器矩形 {x, y, width, height}
+     * @param {number} margin - 边距
+     * @returns {Object} 约束后的矩形
+     * @private
+     */
+    _clampBoxPosition(box, container, margin = 10) {
+        let x = box.x;
+        let y = box.y;
+        const containerRight = container.x + container.width;
+        const containerBottom = container.y + container.height;
+
+        // 右侧超出
+        if (x + box.width > containerRight - margin) {
+            x = containerRight - margin - box.width;
+        }
+        // 下方超出
+        if (y + box.height > containerBottom - margin) {
+            y = containerBottom - margin - box.height;
+        }
+        // 左侧超出
+        if (x < container.x + margin) {
+            x = container.x + margin;
+        }
+        // 上方超出
+        if (y < container.y + margin) {
+            y = container.y + margin;
+        }
+        return { x, y, width: box.width, height: box.height };
+    }
+
+    /**
      * 调整标牌位置（私有）
      * 通过碰撞检测回调或边界约束调整标牌位置，避免重叠和越界
      */
@@ -1054,15 +1087,36 @@ class MarkerItem {
             this._rectScutchon = resultRect;
         }
 
-        // 确保标牌不超出上边界
-        if (this._rectScutchon.y < SCUTCHON_MARGIN) {
-            this._rectScutchon.y = SCUTCHON_MARGIN;
-        }
+        const clamped = this._clampBoxPosition(
+            this._rectScutchon,
+            { x: 0, y: 0, width: this._rect.width, height: this._rect.height },
+            SCUTCHON_MARGIN
+        );
+        this._rectScutchon = clamped;
+    }
 
-        // 确保标牌不超出右边界
-        if (this._rectScutchon.x + this._rectScutchon.width > this._rect.width - SCUTCHON_MARGIN) {
-            this._rectScutchon.x = this._rect.width - SCUTCHON_MARGIN - this._rectScutchon.width;
-        }
+    /**
+     * 绘制圆角矩形路径
+     * @param {CanvasRenderingContext2D} ctx - Canvas上下文
+     * @param {number} x - 左上角X坐标
+     * @param {number} y - 左上角Y坐标
+     * @param {number} width - 矩形宽度
+     * @param {number} height - 矩形高度
+     * @param {number} radius - 圆角半径
+     */
+    _drawRoundRect(ctx, x, y, width, height, radius){
+        const r = Math.min(radius, width / 2, height / 2);
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + width - r, y);
+        ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+        ctx.lineTo(x + width, y + height - r);
+        ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+        ctx.lineTo(x + r, y + height);
+        ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
     }
 
     /**
@@ -1079,24 +1133,8 @@ class MarkerItem {
         ctx.fillStyle = this._colorGroup.scutchonBackground;
         ctx.lineWidth = 2;
 
-        const r = rounded;
-        const x = this._rectScutchon.x;
-        const y = this._rectScutchon.y;
-        const w = this._rectScutchon.width;
-        const h = this._rectScutchon.height;
-
-        ctx.beginPath();
-        ctx.moveTo(x + r, y);
-        ctx.lineTo(x + w - r, y);
-        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-        ctx.lineTo(x + w, y + h - r);
-        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-        ctx.lineTo(x + r, y + h);
-        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-        ctx.lineTo(x, y + r);
-        ctx.quadraticCurveTo(x, y, x + r, y);
-        ctx.closePath();
-
+        this._drawRoundRect(ctx, this._rectScutchon.x, this._rectScutchon.y, 
+            this._rectScutchon.width, this._rectScutchon.height, rounded);
         ctx.fill();
         ctx.stroke();
     }
