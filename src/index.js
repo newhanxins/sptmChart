@@ -422,6 +422,9 @@ class sptmChart {
   _findNearestFreqIndex(dataInfo, freq, labelInfo){
     if(dataInfo._freqs && dataInfo._freqs.length > 0){
       const arr = dataInfo._freqs;
+      // 边界处理
+      if (freq <= arr[0]) return { index: 0, realFreq: arr[0] };
+      if (freq >= arr[arr.length - 1]) return { index: arr.length - 1, realFreq: arr[arr.length - 1] };
       let left = 0, right = arr.length - 1;
       // 二分查找确定目标频率所在区间
       while (left < right) {
@@ -431,7 +434,7 @@ class sptmChart {
       }
       // 比较左右邻近点，返回最近的索引
       let nearestIdx = left;
-      if (left > 0 && Math.abs(arr[left - 1] - freq) < Math.abs(arr[left] - freq)) {
+      if (left > 0 && Math.abs(arr[left - 1] - freq) <= Math.abs(arr[left] - freq)) {
         nearestIdx = left - 1;
       }
       return { index: nearestIdx, realFreq: arr[nearestIdx] };
@@ -1672,21 +1675,11 @@ class sptmChart {
     //数据抽点处理
     if(data.drawData.length>drawWidth){
       data.lineType='pointline';
-      let pointdata=extractTwoPolesTraceLine(data.data,data.data.length,drawWidth);
+      let pointdata=extractTwoPolesTraceLine(data.drawData,data.drawData.length,drawWidth);
       data.drawData=pointdata;
-      // 如果有真实频率，根据抽点索引提取对应的频率
-      if(data._freqs&&data._freqs.length>0){
-        let freqTargetData=[];
-        for(let i=0;i<pointdata.dataIndex.length;i++){
-          let maxIdx=pointdata.dataIndex[i][0];
-          let minIdx=pointdata.dataIndex[i][1];
-          freqTargetData.push([data._freqs[maxIdx],data._freqs[minIdx]]);
-        }
-        data._freqs=freqTargetData;
-      }
+      // data._freqs 保持原始一维数组，不抽点
     }else if(data.drawData.length===drawWidth){
       data.lineType='line';
-      data.drawData=data.data;
     }else{
       data.lineType='step';
     }
@@ -1779,13 +1772,7 @@ class sptmChart {
         let minpoint = linedata[i][1];
         let startPointPx=labelInfo.start_x;
         let startx=this.options.grid.left+startPointPx;
-        let x;
-        if(data._freqs&&Array.isArray(data._freqs[i])){
-          let avgFreq=(data._freqs[i][0]+data._freqs[i][1])/2;
-          x=startx+(avgFreq-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*labelInfo.width;
-        }else{
-          x = startx+ i * drawStepPx;
-        }
+        let x = startx + i * drawStepPx;
         let rightBoundary = this.width - this.options.grid.right;
         let leftBoundary = this.options.grid.left;
         let epsilon = 0.5;
@@ -1887,6 +1874,14 @@ class sptmChart {
             for (let d of data) {
               if (d.freq_data && Array.isArray(d.freq_data) && d.freq_data.length > 0) {
                 d._freqs = [...d.freq_data];
+                d._hasRealFreq = true;
+              } else if (d.data && d.data.length > 0 && d.start_freq !== undefined && d.end_freq !== undefined) {
+                // 没有 freq_data 时，根据频率范围自动生成等间隔频率点
+                const step = (d.end_freq - d.start_freq) / (d.data.length - 1);
+                d._freqs = [];
+                for (let j = 0; j < d.data.length; j++) {
+                  d._freqs.push(Math.round(d.start_freq + j * step));
+                }
                 d._hasRealFreq = true;
               }
             }

@@ -145,20 +145,242 @@
       background: #f44336;
       color: white;
     }
+    /* 频段配置面板样式 */
+    .band-config-panel {
+      margin: 10px 0;
+      padding: 15px;
+      background: #f5f5f5;
+      border-radius: 8px;
+    }
+    .band-config-panel h3 {
+      margin: 0 0 10px 0;
+      color: #333;
+      font-size: 16px;
+    }
+    .mode-switch {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 15px;
+      align-items: center;
+    }
+    .mode-switch label {
+      font-size: 14px;
+      color: #333;
+      cursor: pointer;
+    }
+    .mode-switch input[type="radio"] {
+      margin-right: 4px;
+    }
+    .band-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+    .band-item {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      background: #fff;
+      padding: 10px 12px;
+      border-radius: 4px;
+      border-left: 3px solid #239ee7;
+      flex-wrap: wrap;
+    }
+    .band-item label {
+      font-size: 13px;
+      color: #666;
+      white-space: nowrap;
+    }
+    .band-item input {
+      padding: 4px 8px;
+      border: 1px solid #ddd;
+      border-radius: 3px;
+      font-size: 13px;
+      width: 100px;
+    }
+    .band-item .band-index {
+      font-weight: bold;
+      color: #239ee7;
+      min-width: 40px;
+    }
+    .band-item .btn-del-band {
+      background: #f44336;
+      color: white;
+      border: none;
+      border-radius: 3px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .band-item .btn-del-band:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    .band-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .current-mode-display {
+      font-size: 14px;
+      color: #239ee7;
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+    /* 合并面板样式 */
+    .config-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .config-label {
+      font-size: 14px;
+      color: #333;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    /* 绘制控制样式 */
+    .draw-control {
+      margin-top: 15px;
+      padding-top: 15px;
+      border-top: 1px solid #ddd;
+    }
+    .draw-control h4 {
+      margin: 0 0 10px 0;
+      color: #333;
+      font-size: 15px;
+    }
+    .draw-control-row {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .draw-mode-row {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      flex-wrap: wrap;
+    }
+    .draw-mode-label {
+      font-size: 13px;
+      color: #333;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .interval-label {
+      font-size: 13px;
+      color: #666;
+    }
+    .interval-input {
+      width: 70px;
+      padding: 4px 8px;
+      border: 1px solid #ddd;
+      border-radius: 3px;
+      font-size: 13px;
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
   <div id="mycanvas" style="color: rebeccapurple;"></div>
   
-  <!-- 图表模式控制 -->
-  <div class="panel-section">
-    <h3>图表模式</h3>
-    <div class="btn-group">
-      <button class="btn btn-primary" onclick="setChartType('line')">线图模式</button>
-      <button class="btn btn-success" onclick="setChartType('waterfall')">瀑布图模式</button>
+  
+
+  <!-- 图表配置面板（合并图表模式 + 频段配置 + 绘制控制） -->
+  <div class="panel-section band-config-panel" id="bandConfigPanel">
+    <h3>图表配置</h3>
+    
+    <!-- 图表类型 -->
+    <div class="config-row">
+      <span class="config-label">图表类型:</span>
+      <div class="btn-group" style="margin-bottom:0;">
+        <button class="btn btn-primary" onclick="setChartType('line')">线图模式</button>
+        <button class="btn btn-success" onclick="setChartType('waterfall')">瀑布图模式</button>
+      </div>
+    </div>
+
+    <!-- 数据模式 -->
+    <div class="config-row">
+      <span class="config-label">数据模式:</span>
+      <div class="mode-switch" style="margin-bottom:0;">
+        <label><input type="radio" name="chartMode" value="fft" checked onchange="switchChartMode('fft')"> FFT 单频</label>
+        <label><input type="radio" name="chartMode" value="dscan" onchange="switchChartMode('dscan')"> DScan 频段</label>
+      </div>
+    </div>
+
+    <div class="current-mode-display" id="currentModeDisplay">当前模式: FFT 单频</div>
+
+    <!-- FFT单频参数 -->
+    <div id="fftConfigArea">
+      <div class="config-row">
+        <span class="config-label">中心频率(MHz):</span>
+        <input type="number" id="fftCenterFreq" value="200" min="0" onchange="updateFFTConfig()" class="interval-input" style="width:100px;">
+        <span class="config-label">显宽(MHz):</span>
+        <input type="number" id="fftSpan" value="20" min="1" onchange="updateFFTConfig()" class="interval-input" style="width:100px;">
+      </div>
+    </div>
+
+    <!-- 频段配置 -->
+    <div id="bandConfigArea" style="display:none;">
+      <div class="config-row" style="margin-bottom:8px;">
+        <label class="draw-mode-label" style="cursor:pointer;">
+          <input type="checkbox" id="useRealFreq" style="margin-right:4px;">
+          使用真实频率(freq_data)
+        </label>
+      </div>
+      <div id="bandList" class="band-list"></div>
+      <div class="band-actions">
+        <button class="btn btn-success" onclick="addBand()">增加频段</button>
+        <button class="btn btn-primary" onclick="generateBandTrace()">生成谱线</button>
+      </div>
+    </div>
+
+    <!-- 谱线管理 -->
+    <div class="panel-section" style="margin:15px -15px 0;padding:15px;background:#fff;border-radius:8px;">
+      <h3 style="margin:0 0 10px 0;color:#333;font-size:16px;">谱线管理</h3>
+      <div class="config-row" style="gap:6px;align-items:center;">
+        <span class="config-label">谱线ID:</span>
+        <input type="number" id="traceIdInput" value="1" min="1" class="interval-input" style="width:60px;">
+        <span class="config-label">名称:</span>
+        <input type="text" id="traceNameInput" value="新谱线" class="interval-input" style="width:90px;">
+        <label class="draw-mode-label" style="cursor:pointer;">
+          <input type="checkbox" id="traceUseRealFreq" style="margin-right:4px;">
+          真实频率
+        </label>
+        <label class="draw-mode-label" style="cursor:pointer;">
+          <input type="checkbox" id="traceVisible" checked style="margin-right:4px;">
+          显示
+        </label>
+        <button class="btn btn-primary" onclick="addCustomTrace()">添加谱线</button>
+        <button class="btn btn-danger" onclick="clearAllTraces()">清除所有</button>
+      </div>
+      <div id="traceList" class="trace-list"></div>
+    </div>
+
+    <!-- 绘制控制 -->
+    <div class="draw-control" id="drawControlArea">
+      <h4>绘制控制</h4>
+      <div class="draw-control-row">
+        <button class="btn btn-success" id="btnStartDraw" onclick="startDraw()">开始绘制</button>
+        <button class="btn btn-danger" id="btnStopDraw" onclick="stopDraw()">结束绘制</button>
+      </div>
+      <div class="draw-mode-row">
+        <label class="draw-mode-label"><input type="radio" name="drawMode" value="single" onchange="switchDrawMode('single')"> 单次</label>
+        <label class="draw-mode-label"><input type="radio" name="drawMode" value="loop" checked onchange="switchDrawMode('loop')"> 循环</label>
+        <span class="interval-label">循环间隔时间(ms):</span>
+        <input type="number" id="drawInterval" value="20" min="1" max="10000" class="interval-input">
+      </div>
     </div>
   </div>
-
   <!-- Marker控制面板 -->
   <div class="panel-section">
     <h3>Marker 控制面板</h3>
@@ -180,29 +402,7 @@
       <span>跟随谱线：<strong id="traceId">-</strong></span>
     </div>
   </div>
-
-  <!-- 谱线测试面板 -->
-  <div class="panel-section">
-    <h3>谱线测试</h3>
-    <div class="btn-group">
-      <button class="btn btn-primary" onclick="addNormalTrace()">添加普通谱线</button>
-      <button class="btn btn-success" onclick="testFreqData()">测试真实频率(freq_data)</button>
-      <button class="btn btn-warning" onclick="addCompareTraces()">添加对比谱线(真实vs等间隔)</button>
-      <button class="btn btn-danger" onclick="clearAllTraces()">清除所有谱线</button>
-    </div>
-    <div id="traceList" class="trace-list"></div>
-  </div>
-
-  <p>
-    <button onclick="changeProperty()">更改门限属性</button>
-    <button onclick="changeYAxisProperty()">更改y轴属性</button>
-    <button onclick="changeOptions()">更改属性</button>
-    <button onclick="getOptions()">获取属性</button>
-    <button onclick="stop()">停止</button>
-  </p>
-
   <div id="tip"></div>
-  <canvas id="myCanvass" width="500" height="500"></canvas>
   
   <script src="../dist/sptmChart.js"></script>
   <script>
@@ -425,108 +625,9 @@
       
       console.log(sptmCharts.getOptions());
       console.log(sptmCharts);
-      timeLine()
       updateTraceList();
 
     };
-    // 更新数据
-    function updateData(id){
-      let datasArr = generateNumbersWithDominantMiddle(1032, 10, 80);
-      let datas=[
-          {
-            "point":1032,
-            "center_freq":200000000,
-            "span":100,
-            "data":datasArr,
-          }
-        ]
-        // 赋值
-        dataInfo.data=datasArr;
-        dataInfo.peakdata=mergeArray(datasArr,dataInfo.peakdata);
-        dataInfo.avgdata=mergeArrayAvg(datasArr,dataInfo.avgdata,6);
-        sptmCharts.setTraceData(id,datas)
-
-        sptmCharts.setTraceData(2,[
-          {
-            "point":1032,
-            "center_freq":200000000,
-            "span":100,
-            "data":dataInfo.peakdata,
-          }
-        ])//峰值
-        sptmCharts.setTraceData(3,[
-          {
-            "point":1032,
-            "center_freq":200000000,
-            "span":100,
-            "data":dataInfo.avgdata,
-          }
-        ])//平均值
-    }
-    // 传入两个数组，返回一个数组，数组长度为第一个数组长度，数组元素为第一个数组元素和第二个数组元素最大值
-    function mergeArray(arr1, arr2) {
-      let result = [];
-      for (let i = 0; i < arr1.length; i++) {
-        result.push(Math.max(arr1[i], arr2[i]));
-      }
-      return result;
-    }
-    // 传入两个数组dan的数组，返回一个数组，数组长度为第一个数组长度，数组元素为第一个数组元素和第二个数组元素平均值，保留小数点后n位
-    function mergeArrayAvg(arr1, arr2, n) {
-      let result = [];
-      for (let i = 0; i < arr1.length; i++) {
-        result.push(Math.round((arr1[i] + arr2[i]) / 2 * Math.pow(10, n)) / Math.pow(10, n));
-      }
-      return result;
-    }
-    // 参数转为数字保留小数点后n位
-    function toNumber(num, n) {
-      return Math.round(num * Math.pow(10, n)) / Math.pow(10, n);
-    }
-    function timeLine(){
-      setInterval(function() {
-        // updateData(1)
-        // let datas=[
-        //   {
-        //     "point":1032,
-        //     "center_freq":200000000,
-        //     "span":100,
-        //     "data":generateNumbersWithDominantMiddle(1032, -20, 58),
-        //   }
-        // ]
-        
-        // sptmCharts.setTraceData(1,datas)
-        // let datass=[
-        //   {
-        //     "point":1032,
-        //     "center_freq":200000000,
-        //     "span":100,
-        //     "data":generateNumbersWithDominantMiddle(1032, -6, 5),
-        //   }
-        // ]
-        // sptmCharts.setTraceData(2,datass)
-
-        let datainfo=[
-          {
-            "point":1600,
-            "step":200000000,
-            "start_freq":200000000,
-            "end_freq":1000000000,
-            "width":1,
-            "data":generateNumbersWithDominantMiddle(1600, -20, 100),
-          },
-          {
-            "point":2000,
-            "step":200000000,
-            "start_freq":1200000000,
-            "end_freq":2000000000,
-            "width":1,
-            "data":generateNumbersWithDominantMiddle(2000, -20, 60),
-          }
-        ]
-         sptmCharts.setTraceData(4,datainfo)
-      },100)
-    }
     // ========== Marker功能函数 ==========
     
     // 添加Marker
@@ -681,12 +782,21 @@
       document.getElementById('traceId').textContent = traceId >= 0 ? traceId : '-';
     }
 
-    // ========== 原有函数 ==========
-    
-    function stop() {
-      sptmCharts.stopChart();
+    // ========== 颜色生成器 ==========
+    const TRACE_COLORS = [
+      '#239ee7', '#4caf50', '#f44336', '#ff9800', '#00bcd4',
+      '#e91e63', '#9c27b0', '#3f51b5', '#009688', '#ff5722',
+      '#795548', '#607d8b', '#8bc34a', '#cddc39', '#ffeb3b'
+    ];
+    let traceColorIndex = 0;
+
+    function getNextTraceColor() {
+      const color = TRACE_COLORS[traceColorIndex % TRACE_COLORS.length];
+      traceColorIndex++;
+      return color;
     }
 
+    // ========== 工具函数 ==========
     function generateNumbersWithDominantMiddle(count, min, max) {
       const numbers = [];
       for (let i = 0; i < count - 21; i++) {
@@ -706,51 +816,6 @@
       return numbers;
     }
     
-    function changeProperty() {
-      sptmCharts.setThresholdAttribute({
-        "visible": true,
-        "is_darg": true,
-      });
-    }
-    function changeYAxisProperty() {
-      sptmCharts.setOptions({
-        "yaxis": {
-          "min_value": -20,
-          "max_value": 20,
-          "floor_value": -20,
-          "ceiling_value": 200
-        }
-      });
-    }
-    
-    function changeOptions() {
-      let options = {
-        "xaxis": {
-          "dscan_freq": [
-            {
-              "start_freq": 200000000,
-              "end_freq": 5000000000,
-              "width": 1,
-            },
-            {
-              "start_freq": 6000000000,
-              "end_freq": 9000000000,
-              "width": 1,
-            }
-          ]
-        },
-        "level_tipline": {
-          "visible": true,
-          "color": "#00afff",
-          "width": 1,
-        }
-      };
-      sptmCharts.setOptions(options);
-    }
-    function getOptions(){
-      console.log(sptmCharts.getOptions());
-    }
-
     // ========== freq_data 测试 ==========
     function testFreqData() {
       const pointCount = 1600;
@@ -797,30 +862,61 @@
     }
 
     // ========== 谱线控制函数 ==========
-    function addNormalTrace() {
-      const traceId = Date.now();
+    function addCustomTrace() {
+      const traceIdInput = document.getElementById('traceIdInput');
+      const traceId = parseInt(traceIdInput.value, 10) || 1;
+      const traceName = document.getElementById('traceNameInput').value || '新谱线';
+      const useRealFreq = document.getElementById('traceUseRealFreq').checked;
+      const isVisible = document.getElementById('traceVisible').checked;
+      const color = getNextTraceColor();
+      addTraceWithId(traceId, traceName, color, useRealFreq, isVisible);
+      // ID自动递增
+      traceIdInput.value = traceId + 1;
+    }
+
+    function addTraceWithId(traceId, traceName, color, useRealFreq = false, isVisible = true) {
+      const centerFreqMHz = parseFloat(document.getElementById('fftCenterFreq').value) || 200;
+      const spanMHz = parseFloat(document.getElementById('fftSpan').value) || 20;
+      const centerFreq = centerFreqMHz * 1000000;
+      const span = spanMHz * 1000000;
+      const startFreq = centerFreq - span / 2;
+      const endFreq = centerFreq + span / 2;
+
+      const data = generateNumbersWithDominantMiddle(1600, -20, 100);
+      const datainfo = [{
+        point: 1600,
+        step: 200000000,
+        start_freq: startFreq,
+        end_freq: endFreq,
+        width: 1,
+        data: data
+      }];
+      
+      if (useRealFreq) {
+        const freqData = [];
+        const freqStep = (endFreq - startFreq) / (1600 - 1);
+        for (let i = 0; i < 1600; i++) {
+          const baseFreq = startFreq + i * freqStep;
+          const sineOffset = Math.sin(i / 1600 * Math.PI * 12) * (freqStep * 0.3);
+          const randomOffset = (Math.random() - 0.5) * (freqStep * 0.2);
+          freqData.push(Math.round(baseFreq + sineOffset + randomOffset));
+        }
+        datainfo[0].freq_data = freqData;
+      }
+
       let traceData = {
         "id": traceId,
         "type": "FFT",
-        "visibility": true,
+        "visibility": isVisible,
         "point": 1600,
-        "name": "谱线" + traceId,
-        "color": "#" + Math.floor(Math.random()*16777215).toString(16),
+        "name": traceName,
+        "color": color,
         "width": 1,
-        "datainfo": [
-          {
-            "point":1600,
-            "step":200000000,
-            "start_freq":200000000,
-            "end_freq":1000000000,
-            "width":1,
-            "data":generateNumbersWithDominantMiddle(1600, -20, 100),
-          }
-        ]
+        "datainfo": datainfo
       };
       sptmCharts.addTrace(traceData);
       updateTraceList();
-      console.log('普通谱线已添加', traceId);
+      console.log('谱线已添加', traceId, traceName, color, useRealFreq ? '真实频率' : '普通数据');
     }
 
     function addCompareTraces() {
@@ -887,6 +983,7 @@
     }
 
     function clearAllTraces() {
+      stopDraw();
       const traces = sptmCharts.getTraces ? sptmCharts.getTraces() : [];
       traces.forEach(t => {
         if (typeof sptmCharts.removeTrace === 'function') {
@@ -952,11 +1049,378 @@
         } else {
           console.warn('当前版本不支持删除谱线');
         }
+        // 删除后检查是否还有trace，如果没有则停止绘制
+        const remainingTraces = sptmCharts.getTraces ? sptmCharts.getTraces() : [];
+        if (remainingTraces.length === 0) {
+          stopDraw();
+        }
         updateTraceList();
       } catch(e) {
         console.error('删除谱线失败:', e);
       }
     }
+
+    // ========== 频段配置功能 ==========
+    let currentChartMode = 'fft';
+    let bandConfig = [];
+    const BAND_MAX_COUNT = 6;
+    const BAND_DEFAULTS = [
+      { start: 20, end: 1000, point: 1600 },
+      { start: 1200, end: 2000, point: 2000 }
+    ];
+
+    function initBandConfig() {
+      bandConfig = BAND_DEFAULTS.map((item, index) => ({
+        id: index + 1,
+        start: item.start,
+        end: item.end,
+        point: item.point
+      }));
+      renderBandList();
+    }
+
+    function switchChartMode(mode) {
+      currentChartMode = mode;
+      document.getElementById('currentModeDisplay').textContent = 
+        mode === 'fft' ? '当前模式: FFT 单频' : '当前模式: DScan 频段';
+      const bandConfigArea = document.getElementById('bandConfigArea');
+      const fftConfigArea = document.getElementById('fftConfigArea');
+      if (mode === 'fft') {
+        if (bandConfigArea) bandConfigArea.style.display = 'none';
+        if (fftConfigArea) fftConfigArea.style.display = 'block';
+        // 切换到FFT模式时更新图表
+        updateChartFFTSettings();
+      } else {
+        if (bandConfigArea) bandConfigArea.style.display = 'block';
+        if (fftConfigArea) fftConfigArea.style.display = 'none';
+        // 切换到DScan模式时更新图表
+        updateChartDScanSettings();
+      }
+    }
+
+    function updateChartFFTSettings() {
+      const centerFreqMHz = parseFloat(document.getElementById('fftCenterFreq').value) || 200;
+      const spanMHz = parseFloat(document.getElementById('fftSpan').value) || 20;
+      const centerFreq = centerFreqMHz * 1000000;
+      const span = spanMHz * 1000000;
+      sptmCharts.setOptions({
+        type: 'FFT',
+        center_freq: centerFreq,
+        span: span
+      });
+    }
+
+    function updateChartDScanSettings() {
+      const dscan_freq = bandConfig.map(band => ({
+        start_freq: band.start * 1000000,
+        end_freq: band.end * 1000000,
+        width: 1
+      }));
+      sptmCharts.setOptions({
+        type: 'DScan',
+        xaxis: {
+          dscan_freq: dscan_freq
+        }
+      });
+    }
+
+    function updateFFTConfig() {
+      if (currentChartMode === 'fft') {
+        updateChartFFTSettings();
+      }
+    }
+
+    function addBand() {
+      if (bandConfig.length >= BAND_MAX_COUNT) {
+        alert('频段数量不能超过 ' + BAND_MAX_COUNT + ' 段');
+        return;
+      }
+      const lastBand = bandConfig[bandConfig.length - 1];
+      const newStart = lastBand ? lastBand.end + 200 : 20;
+      const newEnd = newStart + 800;
+      bandConfig.push({
+        id: Date.now(),
+        start: newStart,
+        end: newEnd,
+        point: 1600
+      });
+      renderBandList();
+      if (currentChartMode === 'dscan') {
+        updateChartDScanSettings();
+      }
+    }
+
+    function removeBand(index) {
+      if (bandConfig.length <= 1) {
+        alert('至少需要保留一段频段');
+        return;
+      }
+      bandConfig.splice(index, 1);
+      renderBandList();
+      if (currentChartMode === 'dscan') {
+        updateChartDScanSettings();
+      }
+    }
+
+    function updateBandValue(index, field, value) {
+      if (index >= 0 && index < bandConfig.length) {
+        bandConfig[index][field] = parseInt(value, 10) || 0;
+        if (currentChartMode === 'dscan') {
+          updateChartDScanSettings();
+        }
+      }
+    }
+
+    function renderBandList() {
+      const container = document.getElementById('bandList');
+      if (!container) return;
+      container.innerHTML = bandConfig.map((band, index) => `
+        <div class="band-item">
+          <span class="band-index">第${index + 1}段</span>
+          <label>起始频率(MHz):</label>
+          <input type="number" value="${band.start}" onchange="updateBandValue(${index}, 'start', this.value)" min="0">
+          <label>结束频率(MHz):</label>
+          <input type="number" value="${band.end}" onchange="updateBandValue(${index}, 'end', this.value)" min="0">
+          <label>生成点数:</label>
+          <input type="number" value="${band.point}" onchange="updateBandValue(${index}, 'point', this.value)" min="1">
+          <button class="btn-del-band" onclick="removeBand(${index})" ${bandConfig.length <= 1 ? 'disabled' : ''}>删除</button>
+        </div>
+      `).join('');
+    }
+
+    function generateBandTrace() {
+      if (currentChartMode === 'fft') {
+        generateFFTTrace();
+        return;
+      }
+
+      const useRealFreq = document.getElementById('useRealFreq') && document.getElementById('useRealFreq').checked;
+
+      const datainfo = bandConfig.map(band => {
+        const startFreq = band.start * 1000000;
+        const endFreq = band.end * 1000000;
+        const freqStep = (endFreq - startFreq) / (band.point - 1);
+        const data = generateNumbersWithDominantMiddle(band.point, -20, 100);
+        const info = {
+          point: band.point,
+          step: 200000000,
+          start_freq: startFreq,
+          end_freq: endFreq,
+          width: 1,
+          data: data
+        };
+        if (useRealFreq) {
+          const freqData = [];
+          for (let i = 0; i < band.point; i++) {
+            const baseFreq = startFreq + i * freqStep;
+            const sineOffset = Math.sin(i / band.point * Math.PI * 12) * (freqStep * 0.3);
+            const randomOffset = (Math.random() - 0.5) * (freqStep * 0.2);
+            freqData.push(Math.round(baseFreq + sineOffset + randomOffset));
+          }
+          info.freq_data = freqData;
+        }
+        return info;
+      });
+
+      const color = getNextTraceColor();
+      const traceData = {
+        id: 4,
+        type: 'FFT',
+        visibility: true,
+        point: datainfo.reduce((sum, item) => sum + item.point, 0),
+        name: 'DScan频段',
+        color: color,
+        width: 1,
+        datainfo: datainfo
+      };
+
+      sptmCharts.removeTrace(4);
+      sptmCharts.addTrace(traceData);
+      // 同步更新图表的dscan_freq配置
+      const dscan_freq = bandConfig.map(band => ({
+        start_freq: band.start * 1000000,
+        end_freq: band.end * 1000000,
+        width: 1
+      }));
+      sptmCharts.setOptions({
+        xaxis: {
+          dscan_freq: dscan_freq
+        }
+      });
+      updateTraceList();
+      console.log('DScan频段谱线已生成', traceData, useRealFreq ? '使用真实频率' : '使用普通data');
+    }
+
+    function generateFFTTrace() {
+      const centerFreqMHz = parseFloat(document.getElementById('fftCenterFreq').value) || 200;
+      const spanMHz = parseFloat(document.getElementById('fftSpan').value) || 20;
+      const centerFreq = centerFreqMHz * 1000000;
+      const span = spanMHz * 1000000;
+      const startFreq = centerFreq - span / 2;
+      const endFreq = centerFreq + span / 2;
+
+      const color = getNextTraceColor();
+      const traceData = {
+        id: 4,
+        type: 'FFT',
+        visibility: true,
+        point: 1600,
+        name: 'FFT单频',
+        color: color,
+        width: 1,
+        datainfo: [
+          {
+            point: 1600,
+            step: 200000000,
+            start_freq: startFreq,
+            end_freq: endFreq,
+            width: 1,
+            data: generateNumbersWithDominantMiddle(1600, -20, 100)
+          }
+        ]
+      };
+      sptmCharts.removeTrace(4);
+      sptmCharts.addTrace(traceData);
+      // 同步更新图表的center_freq和span
+      sptmCharts.setOptions({
+        center_freq: centerFreq,
+        span: span
+      });
+      updateTraceList();
+      console.log('FFT单频谱线已生成', traceData);
+    }
+
+    // ========== 绘制控制功能 ==========
+    let drawIntervalId = null;
+    let isDrawing = false;
+    let currentDrawMode = 'loop';
+
+    function switchDrawMode(mode) {
+      currentDrawMode = mode;
+      console.log('绘制模式已切换为:', mode === 'single' ? '单次' : '循环');
+    }
+
+    function startDraw() {
+      if (isDrawing) return;
+      isDrawing = true;
+      updateDrawButtonState();
+
+      if (currentDrawMode === 'single') {
+        doDraw();
+        isDrawing = false;
+        updateDrawButtonState();
+      } else {
+        // 循环模式
+        const interval = parseInt(document.getElementById('drawInterval').value, 10) || 20;
+        doDraw(); // 立即执行一次
+        drawIntervalId = setInterval(() => {
+          doDraw();
+        }, interval);
+      }
+    }
+
+    function stopDraw() {
+      if (drawIntervalId) {
+        clearInterval(drawIntervalId);
+        drawIntervalId = null;
+      }
+      isDrawing = false;
+      updateDrawButtonState();
+      console.log('绘制已停止');
+    }
+
+    function doDraw() {
+      if (currentChartMode === 'fft') {
+        doFFTDraw();
+      } else {
+        doDScanDraw();
+      }
+    }
+
+    function doFFTDraw() {
+      const traces = sptmCharts.getTraces ? sptmCharts.getTraces() : [];
+      if (traces.length === 0) return;
+      
+      // 使用配置的中心频率和显宽生成数据
+      const centerFreqMHz = parseFloat(document.getElementById('fftCenterFreq').value) || 200;
+      const spanMHz = parseFloat(document.getElementById('fftSpan').value) || 20;
+      const centerFreq = centerFreqMHz * 1000000;
+      const span = spanMHz * 1000000;
+      const startFreq = centerFreq - span / 2;
+      const endFreq = centerFreq + span / 2;
+      const newData = generateNumbersWithDominantMiddle(1600, -20, 100);
+      const datainfo = [
+        {
+          point: 1600,
+          step: 200000000,
+          start_freq: startFreq,
+          end_freq: endFreq,
+          width: 1,
+          data: newData
+        }
+      ];
+      
+      // 更新所有存在的trace
+      traces.forEach(trace => {
+        sptmCharts.setTraceData(trace.id, datainfo);
+      });
+    }
+
+    function doDScanDraw() {
+      const traces = sptmCharts.getTraces ? sptmCharts.getTraces() : [];
+      if (traces.length === 0) return;
+      
+      // 为每个频段生成新的随机数据并更新
+      const useRealFreq = document.getElementById('useRealFreq') && document.getElementById('useRealFreq').checked;
+      const datainfo = bandConfig.map(band => {
+        const startFreq = band.start * 1000000;
+        const endFreq = band.end * 1000000;
+        const freqStep = (endFreq - startFreq) / (band.point - 1);
+        const data = generateNumbersWithDominantMiddle(band.point, -20, 100);
+        const info = {
+          point: band.point,
+          step: 200000000,
+          start_freq: startFreq,
+          end_freq: endFreq,
+          width: 1,
+          data: data
+        };
+        if (useRealFreq) {
+          const freqData = [];
+          for (let i = 0; i < band.point; i++) {
+            const baseFreq = startFreq + i * freqStep;
+            const sineOffset = Math.sin(i / band.point * Math.PI * 12) * (freqStep * 0.3);
+            const randomOffset = (Math.random() - 0.5) * (freqStep * 0.2);
+            freqData.push(Math.round(baseFreq + sineOffset + randomOffset));
+          }
+          info.freq_data = freqData;
+        }
+        return info;
+      });
+      
+      // 更新所有存在的trace
+      traces.forEach(trace => {
+        sptmCharts.setTraceData(trace.id, datainfo);
+      });
+    }
+
+    function updateDrawButtonState() {
+      const btnStart = document.getElementById('btnStartDraw');
+      const btnStop = document.getElementById('btnStopDraw');
+      if (btnStart) btnStart.disabled = isDrawing;
+      if (btnStop) btnStop.disabled = !isDrawing;
+    }
+
+    // 初始化频段配置
+    initBandConfig();
+    updateDrawButtonState();
+
+    // 页面加载后自动切换到FFT模式并启动循环绘制
+    setTimeout(() => {
+      switchChartMode('fft');
+      generateFFTTrace();
+      startDraw();
+    }, 500);
   </script>
 </body>
 </html>
