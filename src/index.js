@@ -419,6 +419,15 @@ class sptmChart {
     });
   }
 
+  /**
+   * 查找与目标频率最接近的数据点索引及对应真实频率
+   * 优先使用 _freqs 真实频率数组进行二分查找，若无则按等间隔推算
+   * @param {Object} dataInfo - 谱线数据对象，包含 _freqs（真实频率数组）和 data 等
+   * @param {number} freq - 目标频率值（Hz）
+   * @param {Object} [labelInfo] - 当前 X 轴段信息（用于无 _freqs 时计算等间隔索引）
+   * @returns {Object} 返回包含 index（最近数据点索引）和 realFreq（该点真实频率 Hz）的对象
+   * @private
+   */
   _findNearestFreqIndex(dataInfo, freq, labelInfo){
     if(dataInfo._freqs && dataInfo._freqs.length > 0){
       const arr = dataInfo._freqs;
@@ -445,6 +454,105 @@ class sptmChart {
     const ratio = (freq - startFreq) / (endFreq - startFreq);
     const index = Math.round(ratio * (dataInfo.data.length - 1));
     return { index: index, realFreq: freq };
+  }
+
+  /**
+   * Marker 自动吸附逻辑
+   * 在 Marker 拖动结束后，根据配置自动吸附到附近强度最大或最小的数据点
+   * @param {MarkerItem} marker - 需要吸附的 Marker 实例
+   * @private
+   */
+  _snapMarker(marker) {
+    const snapConfig = this.options.marker?.snap;
+    if (!snapConfig || !snapConfig.enabled) return;
+
+    // 获取当前 Marker 跟随的谱线 ID
+    const followTraceId = marker.getTraceId() || 0;
+    let traces = this.tracesData.filter(t => t.visible && t.datainfo);
+    
+    // 如果有指定跟随谱线，优先使用该谱线
+    let targetTrace = null;
+    if (followTraceId > 0) {
+      targetTrace = traces.find(t => t.id === followTraceId);
+    }
+    // 未指定或指定谱线不可见时，使用第一条可见谱线
+    if (!targetTrace && traces.length > 0) {
+      targetTrace = traces[0];
+    }
+    if (!targetTrace || !targetTrace.datainfo) return;
+
+    // 遍历所有频段（支持 DScan 多频段场景）
+    for (let j = 0; j < this.xLabelGridInfo.length; j++) {
+      const info = this.xLabelGridInfo[j];
+      const dataInfo = targetTrace.datainfo[j];
+      if (!dataInfo || !dataInfo.data) continue;
+
+      // 检查像素密度阈值：当每个数据点占据的像素超过阈值时，视为放大到足够精细，不执行吸附
+      const drawStepPx = info.drawStepPx || 0;
+      if (drawStepPx > snapConfig.pixelPerPointThreshold) {
+        console.log(`[Marker吸附] ID=${marker.getMarkerID()}, 当前频段放大到足够精细，跳过吸附, drawStepPx=${drawStepPx}, threshold=${snapConfig.pixelPerPointThreshold}`);
+        continue; // 当前频段放大到足够精细，跳过吸附
+      }
+
+      // 获取 Marker 当前频率对应的数据点索引
+      const freq = marker.getFrequency();
+      if (freq < info.show_start_freq || freq > info.show_end_freq) continue;
+
+      const nearestResult = this._findNearestFreqIndex(dataInfo, freq, info);
+      let currentIdx = nearestResult.index;
+      
+      // 在 [idx - range, idx + range] 范围内查找目标点
+      const range = snapConfig.range || 0;
+      const mode = snapConfig.mode || 'peak';
+      
+      let startIdx = Math.max(0, currentIdx - range);
+      let endIdx = Math.min(dataInfo.data.length - 1, currentIdx + range);
+      
+      if (startIdx > endIdx) continue;
+
+      let targetIdx = currentIdx;
+      
+      if (mode === 'peak') {
+        // 范围内找强度最大的点
+        let maxVal = -Infinity;
+        for (let i = startIdx; i <= endIdx; i++) {
+          if (dataInfo.data[i] > maxVal) {
+            maxVal = dataInfo.data[i];
+            targetIdx = i;
+          }
+        }
+      } else if (mode === 'valley') {
+        // 范围内找强度最小的点
+        let minVal = Infinity;
+        for (let i = startIdx; i <= endIdx; i++) {
+          if (dataInfo.data[i] < minVal) {
+            minVal = dataInfo.data[i];
+            targetIdx = i;
+          }
+        }
+      }
+      
+      // 如果目标点就是当前点，不需要移动
+      if (targetIdx === currentIdx) continue;
+
+      // 计算目标点的真实频率
+      let targetFreq = 0;
+      if (dataInfo._freqs && dataInfo._freqs.length > targetIdx) {
+        targetFreq = dataInfo._freqs[targetIdx];
+      } else {
+        // 等间隔频率计算
+        const ratio = targetIdx / (dataInfo.data.length - 1);
+        targetFreq = info.start_freq + ratio * (info.end_freq - info.start_freq);
+      }
+
+      // 打印吸附日志：吸附点索引、强度、最终频率
+      const snapIntensity = dataInfo.data[targetIdx];
+      console.log(`[Marker吸附] ID=${marker.getMarkerID()}, 吸附点索引=${targetIdx}, 强度=${snapIntensity.toFixed(2)}, 最终频率=${(targetFreq / 1000000).toFixed(4)}MHz`);
+
+      // 移动 Marker 到目标频率
+      this.moveMarkerByFreq(marker.getMarkerID(), targetFreq);
+      return; // 只吸附第一个匹配的频段
+    }
   }
 
   /**
@@ -897,6 +1005,7 @@ class sptmChart {
         "label_angle":0,//*X 轴刻度标签角度
         "draw_zoom_freq":"",//*X 轴绘制缩放基准频率
         "draw_zoom_span":"",//*X 轴绘制缩放基准显宽
+        "x_zoom_threshold": 20,//X 轴缩放点间像素距离阈值（px），默认50，大于该值时不允许继续放大
         "onXRangeChange": null,         // X轴范围变化回调 function({type, source, order, startFreq, endFreq, centerFreq, span, drawZoom, startX, endX})
       
       },
@@ -942,7 +1051,13 @@ class sptmChart {
           "scutchonBackground": "rgba(49, 52, 69, 0.9)",//标牌背景色
           "scutchonForeground": "#ffffff"//标牌文字颜色
         },
-        "clickBlankToExit": true  // 点击空白区域退出焦点
+        "clickBlankToExit": true,  // 点击空白区域退出焦点
+        "snap":{ // Marker 自动吸附配置 - 新增
+          "enabled": false, // 是否开启自动吸附
+          "range": 2, // 吸附范围（左右各几个数据点），0 表示仅吸附到最近点
+          "mode": "peak", // 吸附模式："peak" 找强度最大 / "valley" 找强度最小
+          "pixelPerPointThreshold": 20 // 每数据点像素阈值（px），超过此值不吸附
+        }
       },
       "contextMenu":{ //全局右键菜单配置 - 新增
         "enabled": true,//是否启用右键菜单
@@ -1073,6 +1188,8 @@ class sptmChart {
         "longPressDelay": 200,         // 长按触发选框的延迟（毫秒）
         "onSelect": null               // 选框结束回调 function({startFreq, endFreq, centerFreq, bandwidth, startX, endX})
       },
+      // 外部数据裁剪模式：true 时控件跳过内部裁剪，直接绘制传入的全部数据点
+      "externalDataCrop": false,
     }
     const mergedOptions = deepMerge({}, defaultOptions);
     this.options = deepMerge(mergedOptions,options);
@@ -1662,13 +1779,16 @@ class sptmChart {
     let drawWidth=labelInfo.width;
 
     //截取区域内点数
-    if(labelInfo.start_freq!==labelInfo.show_start_freq||labelInfo.end_freq!==labelInfo.show_end_freq){
-      let startOrder=Math.floor((labelInfo.show_start_freq-labelInfo.start_freq)*data.point/(labelInfo.end_freq-labelInfo.start_freq));
-      let endOrder=Math.floor((labelInfo.show_end_freq-labelInfo.start_freq)*data.point/(labelInfo.end_freq-labelInfo.start_freq));
-      data.drawData=data.data.slice(startOrder,endOrder);
-      // 同步截取 _freqs
-      if(data._freqs&&data._freqs.length>0){
-        data._freqs=data._freqs.slice(startOrder,endOrder);
+    // 当 externalDataCrop 为 true 时，跳过内部裁剪，直接绘制传入的全部数据点
+    if (!this.options.externalDataCrop) {
+      if(labelInfo.start_freq!==labelInfo.show_start_freq||labelInfo.end_freq!==labelInfo.show_end_freq){
+        let startOrder=Math.floor((labelInfo.show_start_freq-labelInfo.start_freq)*data.point/(labelInfo.end_freq-labelInfo.start_freq));
+        let endOrder=Math.floor((labelInfo.show_end_freq-labelInfo.start_freq)*data.point/(labelInfo.end_freq-labelInfo.start_freq));
+        data.drawData=data.data.slice(startOrder,endOrder);
+        // 同步截取 _freqs
+        if(data._freqs&&data._freqs.length>0){
+          data._freqs=data._freqs.slice(startOrder,endOrder);
+        }
       }
     }
     
@@ -1721,11 +1841,11 @@ class sptmChart {
         let startPointPx=labelInfo.start_x;
         let startx=this.options.grid.left+startPointPx;
         let x;
-        if(data._freqs&&data._freqs.length>0){
-          x = startx + (data._freqs[i]-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*labelInfo.width;
-        }else{
+        // if(data._freqs&&data._freqs.length>0){
+        //   x = startx + (data._freqs[i]-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*labelInfo.width;
+        // }else{
           x = startx + i * drawStepPx;
-        }
+        // }
         let rightBoundary = this.width - this.options.grid.right;
         let leftBoundary = this.options.grid.left;
         let epsilon = 0.5;
@@ -1745,16 +1865,18 @@ class sptmChart {
         let startPointPx=labelInfo.start_x;
         let startx=this.options.grid.left+startPointPx;
         let x1, x2;
-        if(data._freqs&&data._freqs.length>0){
-          let centerX = startx + (data._freqs[j]-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*labelInfo.width;
-          let prevX = j>0 ? startx + (data._freqs[j-1]-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*labelInfo.width : startx;
-          let nextX = j<data._freqs.length-1 ? startx + (data._freqs[j+1]-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*labelInfo.width : startx + labelInfo.width;
-          x1 = centerX - (nextX - prevX) / 4;
-          x2 = centerX + (nextX - prevX) / 4;
-        }else{
+        // if(data._freqs&&data._freqs.length>0){
+        //   let centerX = startx + (data._freqs[j]-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*labelInfo.width;
+        //   let prevFreq = j > 0 ? data._freqs[j-1] : (j + 1 < data._freqs.length ? data._freqs[j] - (data._freqs[j+1] - data._freqs[j]) : data._freqs[j]);
+        //   let nextFreq = j < data._freqs.length - 1 ? data._freqs[j+1] : (j > 0 ? data._freqs[j] + (data._freqs[j] - data._freqs[j-1]) : data._freqs[j]);
+        //   let prevX = startx + (prevFreq-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*labelInfo.width;
+        //   let nextX = startx + (nextFreq-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*labelInfo.width;
+        //   x1 = centerX - (nextX - prevX) / 4;
+        //   x2 = centerX + (nextX - prevX) / 4;
+        // }else{
           x1 = startx + j * drawStepPx-drawStepPx/2;
           x2 = startx+ j * drawStepPx+drawStepPx/2;
-        }
+        // }
         if(x1<this.options.grid.left)x1=this.options.grid.left;
         if(x2>this.width-this.options.grid.right)x2=this.width-this.options.grid.right;
         let y = this.height - this.options.grid.bottom - ((point - this.options.yaxis.min_value) /(this.options.yaxis.max_value - this.options.yaxis.min_value)) * this.chartHeight;
@@ -1887,6 +2009,42 @@ class sptmChart {
             }
           }
           this.tracesData[i].datainfo=data;
+          // 外部裁剪模式：根据传入数据的真实频率范围自动同步显示范围
+          if (this.options.externalDataCrop && this.xLabelGridInfo.length > 0) {
+            if (Array.isArray(data)) {
+              for (let dIdx = 0; dIdx < data.length; dIdx++) {
+                const d = data[dIdx];
+                if (!d) continue;
+                const order = dIdx;
+                if (order >= this.xLabelGridInfo.length) break;
+                let actualStartFreq, actualEndFreq;
+                if (d._freqs && d._freqs.length > 0) {
+                  actualStartFreq = d._freqs[0];
+                  actualEndFreq = d._freqs[d._freqs.length - 1];
+                } else if (d.start_freq !== undefined && d.end_freq !== undefined) {
+                  actualStartFreq = d.start_freq;
+                  actualEndFreq = d.end_freq;
+                } else {
+                  continue;
+                }
+                const labelInfo = this.xLabelGridInfo[order];
+                if (labelInfo) {
+                  // 仅当实际范围与当前显示范围有偏差时才更新
+                  if (actualStartFreq !== labelInfo.show_start_freq || actualEndFreq !== labelInfo.show_end_freq) {
+                    labelInfo.show_start_freq = actualStartFreq;
+                    labelInfo.show_end_freq = actualEndFreq;
+                    // 注意：draw_zoom 是用户操作的累积缩放等级，不应该被数据范围覆盖
+                    // 仅同步更新缩放中心与显宽
+                    const newSpan = actualEndFreq - actualStartFreq;
+                    if (newSpan > 0) {
+                      labelInfo.draw_zoom_freq = actualStartFreq + newSpan / 2;
+                      labelInfo.draw_zoom_span = newSpan;
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
         break;
       }
@@ -2263,6 +2421,8 @@ class sptmChart {
               x:this._markerDragState.lastX,
               y:this._markerDragState.lastY
             });
+            // 执行 Marker 自动吸附
+            this._snapMarker(marker);
           }
           this._scheduleDraw();
         }
@@ -2398,8 +2558,8 @@ class sptmChart {
               let labelInfo=this.xLabelGridInfo[order];
               let moveVal=(labelInfo.show_end_freq-labelInfo.show_start_freq)/labelInfo.width*moveX;
               if(moveVal==0)moveVal=Math.sign(moveX);
-              let minval=labelInfo.show_start_freq-moveVal;
-              let maxval=labelInfo.show_end_freq-moveVal;
+              let minval=Math.round(labelInfo.show_start_freq-moveVal);
+              let maxval=Math.round(labelInfo.show_end_freq-moveVal);
               if(minval>=labelInfo.start_freq&&maxval<=labelInfo.end_freq){
                 this.xLabelGridInfo[order].show_start_freq=minval;
                 this.xLabelGridInfo[order].show_end_freq=maxval;
@@ -3113,6 +3273,23 @@ class sptmChart {
   }
   
   /**
+   * 获取指定order的绘制点数量
+   * @param {number} order 
+   * @returns {number}
+   */
+  _getDrawPointCount(order) {
+    let pointCount = 0;
+    for (let i = 0; i < this.tracesData.length; i++) {
+      const trace = this.tracesData[i];
+      if (trace.visible && trace.datainfo && trace.datainfo[order] && trace.datainfo[order].data) {
+        pointCount = trace.datainfo[order].data.length;
+        break;
+      }
+    }
+    return pointCount;
+  }
+
+  /**
    * 缩放事件
    * @param {*} event 
    * @param {*} types 
@@ -3139,10 +3316,18 @@ class sptmChart {
         if(mouseVal.order!==null){
           let order=mouseVal.order;
           let labelInfo=this.xLabelGridInfo[order];
+          // 放大时检查点间像素距离是否达到阈值
+          if (delta > 0) {
+            const drawStepPx = labelInfo.drawStepPx || 0;
+            if (drawStepPx > this.options.xaxis.x_zoom_threshold) {
+              return false;
+            }
+          }
           let initSpan=labelInfo.span;
           let newZoom=labelInfo.draw_zoom+delta;
-          let zoomSpan = Math.max(6, Math.floor(initSpan / newZoom));
-          if(zoomSpan<=initSpan&&zoomSpan>=6){
+          let minSpan = 6;
+          let zoomSpan = Math.max(minSpan, Math.floor(initSpan / newZoom));
+          if(zoomSpan<=initSpan&&zoomSpan>=minSpan){
             let pointx = event.offsetX - this.options.grid.left;
             let centerVal = labelInfo.show_start_freq + (pointx - labelInfo.start_x) / labelInfo.width * (labelInfo.show_end_freq - labelInfo.show_start_freq);
             let minValue=Math.floor(centerVal-(centerVal-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*zoomSpan);
@@ -3210,11 +3395,22 @@ class sptmChart {
       if(mouseVal.order!==null){
         let order=mouseVal.order;
         let labelInfo=this.xLabelGridInfo[order];
+        // 放大时检查点间像素距离是否达到阈值
+        if (delta > 0) {
+          const drawStepPx = labelInfo.drawStepPx || 0;
+          if (drawStepPx > this.options.xaxis.x_zoom_threshold) {
+            console.log("点间像素距离大于阈值，不允许缩放",drawStepPx)
+            return false;
+          }else{
+            console.log("点间像素距离小于等于阈值，允许缩放",drawStepPx)
+          }
+        }
         let initSpan=labelInfo.span;
         let newZoom=labelInfo.draw_zoom+delta;
-        let zoomSpan = Math.max(6, Math.floor(initSpan / newZoom));
+        let minSpan = 6;
+        let zoomSpan = Math.max(minSpan, Math.floor(initSpan / newZoom));
         if(zoomSpan>initSpan)return false;
-        if(zoomSpan < 6)return false;
+        if(zoomSpan < minSpan)return false;
         let pointx = event.offsetX - this.options.grid.left;
         let centerVal = labelInfo.show_start_freq + (pointx - labelInfo.start_x) / labelInfo.width * (labelInfo.show_end_freq - labelInfo.show_start_freq);
         let minValue=Math.floor(centerVal-(centerVal-labelInfo.show_start_freq)/(labelInfo.show_end_freq-labelInfo.show_start_freq)*zoomSpan);
