@@ -1,22 +1,94 @@
 /**
- * 深度合并对象
- * @param {*} target 目标对象
- * @param {*} source 源对象
- * @returns 
+ * 深度合并对象 - 支持嵌套对象、数组、Date、RegExp 等类型的递归合并
+ * @param {*} target 目标对象（合并结果会写入此对象）
+ * @param {*} source 源对象（要合并的属性来源）
+ * @returns {Object} 合并后的 target 对象
+ *
+ * 支持类型：
+ * - 基本类型（string/number/boolean/null/undefined）：直接覆盖
+ * - 普通对象：递归深合并属性
+ * - 数组：递归深合并每个元素，并截断多余元素
+ * - Date：复制时间戳创建新的 Date 实例
+ * - RegExp：复制模式创建新的 RegExp 实例
+ * - Error：复制消息创建新的 Error 实例
+ * - Map/Set：复制元素创建新的 Map/Set 实例（ES6+）
  */
 function deepMerge(target, source) {
-  for (const key in source) {
-    if (source.hasOwnProperty(key)) {
-      if (typeof source[key] === 'object' && source[key] !== null && !Array.isArray(source[key]) && !Array.isArray(target[key])) {
-        if (!target[key]) {
-          target[key] = {};
+  // 源值为基本类型或 null，直接返回源值（无需递归）
+  if (typeof source !== 'object' || source === null) {
+    return source;
+  }
+
+  // Date 类型：复制时间戳创建新的 Date 实例，避免共享引用
+  if (source instanceof Date) {
+    return new Date(source.getTime());
+  }
+
+  // RegExp 类型：复制模式字符串和标志创建新的 RegExp 实例
+  if (source instanceof RegExp) {
+    return new RegExp(source.source, source.flags);
+  }
+
+  // Error 类型：复制消息创建新的 Error 实例
+  if (source instanceof Error) {
+    return new Error(source.message);
+  }
+
+  // Map 类型（ES6+）：递归复制键值对创建新的 Map 实例
+  if (typeof Map !== 'undefined' && source instanceof Map) {
+    var newMap = new Map();
+    source.forEach(function(value, key) {
+      newMap.set(key, deepMerge(null, value));
+    });
+    return newMap;
+  }
+
+  // Set 类型（ES6+）：递归复制元素创建新的 Set 实例
+  if (typeof Set !== 'undefined' && source instanceof Set) {
+    var newSet = new Set();
+    source.forEach(function(value) {
+      newSet.add(deepMerge(null, value));
+    });
+    return newSet;
+  }
+
+  // target 不是对象或 null 时，根据 source 类型初始化
+  if (typeof target !== 'object' || target === null) {
+    target = Array.isArray(source) ? [] : {};
+  }
+
+  // 数组处理：递归深合并每个元素，并截断多余元素保持长度一致
+  if (Array.isArray(source)) {
+    if (!Array.isArray(target)) {
+      target = [];
+    }
+    for (var i = 0; i < source.length; i++) {
+      target[i] = deepMerge(target[i], source[i]);
+    }
+    // 截断多余元素，防止 target 比 source 长时残留旧数据
+    if (target.length > source.length) {
+      target.length = source.length;
+    }
+    return target;
+  }
+
+  // 普通对象：遍历 source 的属性递归深合并
+  for (var key in source) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      var src = source[key];
+      if (typeof src === 'object' && src !== null) {
+        // target[key] 类型不匹配时，根据 source[key] 类型创建新的空容器
+        if (typeof target[key] !== 'object' || target[key] === null || Array.isArray(target[key])) {
+          target[key] = Array.isArray(src) ? [] : {};
         }
-        deepMerge(target[key], source[key]);
+        target[key] = deepMerge(target[key], src);
       } else {
-        target[key] = source[key];
+        // 基本类型直接覆盖
+        target[key] = src;
       }
     }
   }
+
   return target;
 }
 

@@ -6,171 +6,215 @@
   <title>chart Example with Marker</title>
   <link rel="stylesheet" href="../dist/sptmChart.css">
   <style>
-    #mycanvas {
+    * { box-sizing: border-box; }
+    body {
       margin: 0;
-      width: 100%;
-      height: 600px;
-    }
-    .marker-panel {
-      margin: 10px 0;
-      padding: 15px;
-      background: #f5f5f5;
-      border-radius: 8px;
-    }
-    .marker-panel h3 {
-      margin: 0 0 10px 0;
+      padding: 20px;
+      background: #f0f2f5;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       color: #333;
-      font-size: 16px;
     }
+    #mycanvas {
+      margin: 0 0 20px 0;
+      width: 100%;
+      height: 500px;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      overflow: hidden;
+    }
+    /* 卡片容器 */
+    .card-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+    @media (max-width: 768px) {
+      .card-grid { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+      border: 1px solid #e8e8e8;
+    }
+    .card h3 {
+      margin: 0 0 16px 0;
+      color: #1a1a1a;
+      font-size: 16px;
+      font-weight: 600;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #239ee7;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card h3::before {
+      content: '';
+      display: inline-block;
+      width: 4px;
+      height: 16px;
+      background: #239ee7;
+      border-radius: 2px;
+    }
+    .card h4 {
+      margin: 16px 0 12px 0;
+      color: #555;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    /* 按钮 */
     .btn-group {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
-      margin-bottom: 10px;
+      gap: 6px;
+      margin-bottom: 4px;
     }
     .btn {
-      padding: 8px 16px;
+      padding: 5px 12px;
       border: none;
-      border-radius: 4px;
+      border-radius: 6px;
       cursor: pointer;
-      font-size: 13px;
-      transition: all 0.3s;
+      font-size: 12px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
     .btn:hover {
-      opacity: 0.8;
+      opacity: 0.9;
       transform: translateY(-1px);
+      box-shadow: 0 4px 8px rgba(0,0,0,0.15);
     }
-    .btn-primary {
-      background: #239ee7;
-      color: white;
+    .btn:active {
+      transform: translateY(0);
     }
-    .btn-success {
-      background: #4caf50;
-      color: white;
+    .btn-primary { background: linear-gradient(135deg, #239ee7, #1a7bc1); color: white; }
+    .btn-success { background: linear-gradient(135deg, #4caf50, #388e3c); color: white; }
+    .btn-danger { background: linear-gradient(135deg, #f44336, #d32f2f); color: white; }
+    .btn-warning { background: linear-gradient(135deg, #ff9800, #f57c00); color: white; }
+    .btn-info { background: linear-gradient(135deg, #00bcd4, #0097a7); color: white; }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none !important;
+      box-shadow: none;
     }
-    .btn-danger {
-      background: #f44336;
-      color: white;
+    /* Marker 面板 */
+    .marker-panel {
+      margin: 0 0 20px 0;
+      padding: 20px;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+      border: 1px solid #e8e8e8;
     }
-    .btn-warning {
-      background: #ff9800;
-      color: white;
-    }
-    .btn-info {
-      background: #00bcd4;
-      color: white;
+    .marker-panel h3 {
+      margin: 0 0 16px 0;
+      color: #1a1a1a;
+      font-size: 16px;
+      font-weight: 600;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #ff9800;
     }
     .marker-info {
       display: flex;
-      gap: 15px;
+      gap: 12px;
       flex-wrap: wrap;
       font-size: 13px;
       color: #666;
     }
     .marker-info span {
-      background: #fff;
-      padding: 4px 12px;
-      border-radius: 4px;
+      background: #f8f9fa;
+      padding: 6px 14px;
+      border-radius: 6px;
       border-left: 3px solid #239ee7;
+      font-weight: 500;
     }
     .marker-info span.focus {
       border-left-color: #ff9800;
       color: #ff9800;
-      font-weight: bold;
+      font-weight: 600;
     }
-    .panel-section {
-      margin: 10px 0;
-      padding: 15px;
-      background: #f5f5f5;
-      border-radius: 8px;
-    }
-    .panel-section h3 {
-      margin: 0 0 10px 0;
-      color: #333;
-      font-size: 16px;
-    }
-    .trace-list {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 10px;
-    }
-    .trace-item {
+    /* 配置行 */
+    .config-row {
       display: flex;
       align-items: center;
       gap: 6px;
-      background: #fff;
-      padding: 6px 12px;
-      border-radius: 4px;
+      margin-bottom: 3px;
+      flex-wrap: wrap;
+      padding: 1px 0;
+      border-bottom: 1px dashed #f0f0f0;
+    }
+    .config-row:last-child { border-bottom: none; }
+    .config-label {
       font-size: 13px;
-      border-left: 3px solid #ccc;
-    }
-    .trace-item.active {
-      border-left-color: #4caf50;
-    }
-    .trace-item.hidden {
-      border-left-color: #999;
-      opacity: 0.6;
-    }
-    .trace-color {
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-      display: inline-block;
-    }
-    .trace-name {
-      font-weight: 500;
+      color: #555;
+      font-weight: 600;
+      white-space: nowrap;
       min-width: 80px;
     }
-    .trace-btns {
-      display: flex;
-      gap: 4px;
-    }
-    .trace-btns button {
-      padding: 2px 8px;
+    /* 输入框 */
+    .interval-input {
+      width: 80px;
+      padding: 3px 8px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
       font-size: 12px;
-      border: none;
-      border-radius: 3px;
+      transition: border-color 0.2s;
+    }
+    .interval-input:focus {
+      outline: none;
+      border-color: #239ee7;
+      box-shadow: 0 0 0 3px rgba(35, 158, 231, 0.1);
+    }
+    /* 标签 */
+    .draw-mode-label {
+      font-size: 12px;
+      color: #555;
       cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 4px;
+      border-radius: 6px;
+      transition: background 0.2s;
     }
-    .trace-btns .btn-hide {
-      background: #ff9800;
-      color: white;
+    .draw-mode-label:hover {
+      background: #f5f7fa;
     }
-    .trace-btns .btn-show {
-      background: #4caf50;
-      color: white;
+    .interval-label {
+      font-size: 13px;
+      color: #888;
     }
-    .trace-btns .btn-del {
-      background: #f44336;
-      color: white;
+    /* 模式显示 */
+    .current-mode-display {
+      font-size: 13px;
+      color: #239ee7;
+      font-weight: 600;
+      margin-bottom: 4px;
+      padding: 4px 8px;
+      background: #e6f4fd;
+      border-radius: 6px;
+      display: inline-block;
     }
-    /* 频段配置面板样式 */
-    .band-config-panel {
-      margin: 10px 0;
-      padding: 15px;
-      background: #f5f5f5;
-      border-radius: 8px;
-    }
-    .band-config-panel h3 {
-      margin: 0 0 10px 0;
-      color: #333;
-      font-size: 16px;
-    }
+    /* 单选框组 */
     .mode-switch {
       display: flex;
-      gap: 10px;
-      margin-bottom: 15px;
+      gap: 12px;
+      margin-bottom: 4px;
       align-items: center;
     }
     .mode-switch label {
       font-size: 14px;
-      color: #333;
+      color: #444;
       cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
-    .mode-switch input[type="radio"] {
-      margin-right: 4px;
-    }
+    /* 频段列表 */
     .band-list {
       display: flex;
       flex-direction: column;
@@ -181,9 +225,9 @@
       display: flex;
       gap: 8px;
       align-items: center;
-      background: #fff;
-      padding: 10px 12px;
-      border-radius: 4px;
+      background: #f8f9fa;
+      padding: 12px;
+      border-radius: 8px;
       border-left: 3px solid #239ee7;
       flex-wrap: wrap;
     }
@@ -193,65 +237,46 @@
       white-space: nowrap;
     }
     .band-item input {
-      padding: 4px 8px;
+      padding: 6px 10px;
       border: 1px solid #ddd;
-      border-radius: 3px;
+      border-radius: 6px;
       font-size: 13px;
       width: 100px;
     }
     .band-item .band-index {
-      font-weight: bold;
+      font-weight: 600;
       color: #239ee7;
-      min-width: 40px;
+      min-width: 50px;
     }
     .band-item .btn-del-band {
-      background: #f44336;
+      background: linear-gradient(135deg, #f44336, #d32f2f);
       color: white;
       border: none;
-      border-radius: 3px;
-      padding: 4px 10px;
+      border-radius: 6px;
+      padding: 5px 12px;
       cursor: pointer;
       font-size: 12px;
+      transition: all 0.2s;
+    }
+    .band-item .btn-del-band:hover {
+      opacity: 0.9;
+      transform: scale(1.05);
     }
     .band-item .btn-del-band:disabled {
       background: #ccc;
       cursor: not-allowed;
+      transform: none;
     }
     .band-actions {
       display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .current-mode-display {
-      font-size: 14px;
-      color: #239ee7;
-      font-weight: bold;
-      margin-bottom: 10px;
-    }
-    /* 合并面板样式 */
-    .config-row {
-      display: flex;
-      align-items: center;
       gap: 10px;
-      margin-bottom: 10px;
       flex-wrap: wrap;
     }
-    .config-label {
-      font-size: 14px;
-      color: #333;
-      font-weight: 500;
-      white-space: nowrap;
-    }
-    /* 绘制控制样式 */
+    /* 绘制控制 */
     .draw-control {
-      margin-top: 15px;
-      padding-top: 15px;
-      border-top: 1px solid #ddd;
-    }
-    .draw-control h4 {
-      margin: 0 0 10px 0;
-      color: #333;
-      font-size: 15px;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #eee;
     }
     .draw-control-row {
       display: flex;
@@ -265,29 +290,142 @@
       gap: 15px;
       flex-wrap: wrap;
     }
-    .draw-mode-label {
-      font-size: 13px;
-      color: #333;
-      cursor: pointer;
+    /* Trace 列表 */
+    .trace-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .trace-item {
       display: flex;
       align-items: center;
+      gap: 8px;
+      background: #f8f9fa;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      border-left: 3px solid #ccc;
+      transition: all 0.2s;
+    }
+    .trace-item.active {
+      border-left-color: #4caf50;
+      background: #f0f9f0;
+    }
+    .trace-item.hidden {
+      border-left-color: #999;
+      opacity: 0.6;
+    }
+    .trace-color {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      display: inline-block;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    .trace-name {
+      font-weight: 600;
+      min-width: 80px;
+    }
+    .trace-btns {
+      display: flex;
       gap: 4px;
     }
-    .interval-label {
-      font-size: 13px;
-      color: #666;
+    .trace-btns button {
+      padding: 3px 10px;
+      font-size: 12px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.2s;
     }
-    .interval-input {
-      width: 70px;
-      padding: 4px 8px;
-      border: 1px solid #ddd;
-      border-radius: 3px;
-      font-size: 13px;
+    .trace-btns button:hover {
+      opacity: 0.9;
+      transform: scale(1.05);
     }
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
+    .trace-btns .btn-hide { background: #ff9800; color: white; }
+    .trace-btns .btn-show { background: #4caf50; color: white; }
+    .trace-btns .btn-del { background: #f44336; color: white; }
+    /* 旧面板兼容 */
+    .panel-section {
+      margin: 0 0 20px 0;
+      padding: 20px;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+      border: 1px solid #e8e8e8;
     }
+    .panel-section h3 {
+      margin: 0 0 16px 0;
+      color: #1a1a1a;
+      font-size: 16px;
+      font-weight: 600;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #239ee7;
+    }
+    /* 频段配置面板 */
+    .band-config-panel {
+      background: #fff;
+      border-radius: 12px;
+      padding: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+      border: 1px solid #e8e8e8;
+    }
+    .band-config-panel h3 {
+      margin: 0 0 6px 0;
+      color: #1a1a1a;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    /* 左右两列布局 */
+    .config-two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    @media (max-width: 900px) {
+      .config-two-col { grid-template-columns: 1fr; }
+    }
+    .config-col {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    /* 嵌套在config-col中的panel-section移除多余样式 */
+    .config-col .panel-section {
+      margin: 0 !important;
+      padding: 0 !important;
+      background: transparent !important;
+      border: none !important;
+      box-shadow: none !important;
+      border-radius: 0 !important;
+    }
+    .config-col .panel-section h3 {
+      margin: 0 0 6px 0 !important;
+      padding-bottom: 4px;
+      border-bottom: 1px solid #eee !important;
+    }
+    .config-col .draw-control {
+      border-top: none;
+      margin-top: 0;
+      padding-top: 0;
+    }
+    .config-col .config-row {
+      margin-bottom: 0;
+    }
+    .config-col .config-row:last-child {
+      margin-bottom: 0;
+    }
+    /* 状态标签 */
+    .status-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .status-badge.on { background: #e8f5e9; color: #2e7d32; }
+    .status-badge.off { background: #ffebee; color: #c62828; }
   </style>
 </head>
 <body>
@@ -298,6 +436,8 @@
   <!-- 图表配置面板（合并图表模式 + 频段配置 + 绘制控制） -->
   <div class="panel-section band-config-panel" id="bandConfigPanel">
     <h3>图表配置</h3>
+    <div class="config-two-col">
+      <div class="config-col">
     
     <!-- 图表类型 -->
     <div class="config-row">
@@ -338,6 +478,23 @@
       <span id="externalDataCropStatus" style="color:#239ee7;font-size:12px;">当前: 关闭(内部裁剪)</span>
     </div>
 
+    <!-- X轴范围同步模式配置 -->
+    <div class="config-row">
+      <label class="draw-mode-label" style="cursor:pointer;">
+        <input type="checkbox" id="syncXAxisRangeToggle" style="margin-right:4px;" onchange="toggleSyncXAxisRange()">
+        X轴范围同步模式(sync_axis_range)
+      </label>
+      <span id="syncXAxisRangeStatus" style="color:#239ee7;font-size:12px;">当前: 关闭</span>
+    </div>
+
+    <!-- 通用配置（FFT/DScan共用） -->
+    <div class="config-row">
+      <label class="draw-mode-label" style="cursor:pointer;">
+        <input type="checkbox" id="useRealFreq" style="margin-right:4px;">
+        使用真实频率(freq_data)
+      </label>
+    </div>
+
     <!-- FFT单频参数 -->
     <div id="fftConfigArea">
       <div class="config-row">
@@ -352,8 +509,12 @@
     <div id="bandConfigArea" style="display:none;">
       <div class="config-row" style="margin-bottom:8px;">
         <label class="draw-mode-label" style="cursor:pointer;">
-          <input type="checkbox" id="useRealFreq" style="margin-right:4px;">
-          使用真实频率(freq_data)
+          <input type="checkbox" id="dscanMergeData" style="margin-right:4px;" onchange="updateDScanMergeData()">
+          频段合并模式(dscan_merge_data)
+        </label>
+        <label class="draw-mode-label" style="cursor:pointer;">
+          <input type="checkbox" id="useSingleFullData" style="margin-right:4px;">
+          单条完整数据(自动分段)
         </label>
       </div>
       <div id="bandList" class="band-list"></div>
@@ -362,9 +523,10 @@
         <button class="btn btn-primary" onclick="generateBandTrace()">生成谱线</button>
       </div>
     </div>
-
+    </div>
+    <div class="config-col">
     <!-- 谱线管理 -->
-    <div class="panel-section" style="margin:15px -15px 0;padding:15px;background:#fff;border-radius:8px;">
+    <div class="panel-section" style="margin:0;padding:0;background:transparent;border:none;border-radius:0;box-shadow:none;">
       <h3 style="margin:0 0 10px 0;color:#333;font-size:16px;">谱线管理</h3>
       <div class="config-row" style="gap:6px;align-items:center;">
         <span class="config-label">谱线ID:</span>
@@ -398,7 +560,16 @@
         <span class="interval-label">循环间隔时间(ms):</span>
         <input type="number" id="drawInterval" value="20" min="1" max="10000" class="interval-input">
       </div>
+      <div id="singleFullDataRow" class="draw-mode-row" style="margin-top:8px; display:none;">
+        <label class="draw-mode-label" style="cursor:pointer;">
+          <input type="checkbox" id="useSingleFullData" style="margin-right:4px;">
+          单条完整数据(自动分段)
+        </label>
+        <span id="singleFullDataStatus" style="color:#239ee7;font-size:12px;">当前: 传入单条完整数据，由图表自动分段</span>
+      </div>
     </div>
+    </div>
+  </div>
   </div>
   <!-- Marker控制面板 -->
   <div class="panel-section">
@@ -438,7 +609,7 @@
     window.onload = function() {
       let options = {
         "background": "#fff",
-        "type": "DScan",// FFT DScan
+        "type": "FFT",// FFT DScan
         "duration": 50,
         "width": '100%',
         "height": '100%',
@@ -468,7 +639,8 @@
             }
           ],
           "dscan_space": 10,
-          "x_zoom_threshold": 30,//X 轴缩放点间像素距离阈值（px），默认20，小于该值时不允许继续放大
+          "zoom_threshold": 30,//X 轴缩放点间像素距离阈值（px），默认20，小于该值时不允许继续放大
+          "sync_axis_range": false,// 是否根据传入数据的真实频率范围自动同步X轴显示范围
           "onXRangeChange": function(info,event) {
             console.log("X轴范围变化", info);
           },
@@ -481,7 +653,7 @@
           "max_value": 20,
           "number": 5,
           "floor_value": -20,
-          "ceiling_value": 100,
+          "ceiling_value": 140,
           "decimals": 2,
           "onYRangeChange": function(info,event) {
             console.log("Y轴范围变化", info);
@@ -1042,6 +1214,38 @@
         : '当前: 关闭(内部裁剪)';
     }
 
+    // 切换X轴范围同步模式
+    function toggleSyncXAxisRange() {
+      const isEnabled = document.getElementById('syncXAxisRangeToggle').checked;
+      if (sptmCharts) {
+        sptmCharts.setOptions({
+          xaxis: {
+            sync_axis_range: isEnabled
+          }
+        });
+        console.log('X轴范围同步模式已切换:', isEnabled ? '开启' : '关闭');
+      }
+      document.getElementById('syncXAxisRangeStatus').textContent = isEnabled 
+        ? '当前: 开启' 
+        : '当前: 关闭';
+    }
+
+    function updateDScanMergeData() {
+      const isEnabled = document.getElementById('dscanMergeData').checked;
+      // 频段合并模式只能合并单条数据，自动勾选单条完整数据
+      if (isEnabled) {
+        document.getElementById('useSingleFullData').checked = true;
+      }
+      if (sptmCharts) {
+        sptmCharts.setOptions({
+          xaxis: {
+            dscan_merge_data: isEnabled
+          }
+        });
+        console.log('频段合并模式已切换:', isEnabled ? '开启' : '关闭');
+      }
+    }
+
     function setChartType(type) {
       if (!sptmCharts || typeof sptmCharts.setOptions !== 'function') {
         console.warn('sptmCharts 尚未初始化完成');
@@ -1137,14 +1341,17 @@
         mode === 'fft' ? '当前模式: FFT 单频' : '当前模式: DScan 频段';
       const bandConfigArea = document.getElementById('bandConfigArea');
       const fftConfigArea = document.getElementById('fftConfigArea');
+      const singleFullDataRow = document.getElementById('singleFullDataRow');
       if (mode === 'fft') {
         if (bandConfigArea) bandConfigArea.style.display = 'none';
         if (fftConfigArea) fftConfigArea.style.display = 'block';
+        if (singleFullDataRow) singleFullDataRow.style.display = 'none';
         // 切换到FFT模式时更新图表
         updateChartFFTSettings();
       } else {
         if (bandConfigArea) bandConfigArea.style.display = 'block';
         if (fftConfigArea) fftConfigArea.style.display = 'none';
+        if (singleFullDataRow) singleFullDataRow.style.display = 'flex';
         // 切换到DScan模式时更新图表
         updateChartDScanSettings();
       }
@@ -1203,10 +1410,12 @@
         end_freq: band.end * 1000000,
         width: 1
       }));
+      const mergeData = document.getElementById('dscanMergeData')?.checked || false;
       sptmCharts.setOptions({
         type: 'DScan',
         xaxis: {
-          dscan_freq: dscan_freq
+          dscan_freq: dscan_freq,
+          dscan_merge_data: mergeData
         }
       });
     }
@@ -1514,11 +1723,56 @@
     function doDScanDraw() {
       const traces = sptmCharts.getTraces ? sptmCharts.getTraces() : [];
       if (traces.length === 0) return;
-      
+
+      // 检查是否使用单条完整数据模式
+      const useSingleFullData = document.getElementById('useSingleFullData') && document.getElementById('useSingleFullData').checked;
+      const statusEl = document.getElementById('singleFullDataStatus');
+      if (statusEl) {
+        statusEl.style.display = useSingleFullData ? 'inline' : 'none';
+        statusEl.textContent = useSingleFullData ? '当前: 传入单条完整数据，由图表自动分段' : '';
+      }
+
+      if (useSingleFullData) {
+        // 单条完整数据模式：生成覆盖整个 dscan_freq 范围的完整数据
+        const dscanFreq = sptmCharts.options.xaxis.dscan_freq;
+        if (!dscanFreq || dscanFreq.length === 0) return;
+
+        const totalStartFreq = dscanFreq[0].start_freq;
+        const totalEndFreq = dscanFreq[dscanFreq.length - 1].end_freq;
+        const totalPointCount = 3200; // 总点数，可以根据需要调整
+
+        // 生成完整数据
+        const fullData = generateNumbersWithDominantMiddle(totalPointCount, -20, 100);
+        const fullFreqStep = (totalEndFreq - totalStartFreq) / (totalPointCount - 1);
+        const fullFreqData = [];
+        for (let i = 0; i < totalPointCount; i++) {
+          const baseFreq = totalStartFreq + i * fullFreqStep;
+          const sineOffset = Math.sin(i / totalPointCount * Math.PI * 12) * (fullFreqStep * 0.3);
+          const randomOffset = (Math.random() - 0.5) * (fullFreqStep * 0.2);
+          fullFreqData.push(Math.round(baseFreq + sineOffset + randomOffset));
+        }
+
+        const datainfo = [{
+          point: totalPointCount,
+          step: 200000000,
+          start_freq: totalStartFreq,
+          end_freq: totalEndFreq,
+          width: 1,
+          data: fullData,
+          freq_data: fullFreqData
+        }];
+
+        // 更新所有存在的trace
+        traces.forEach(trace => {
+          sptmCharts.setTraceData(trace.id, datainfo);
+        });
+        return;
+      }
+
       // 为每个频段生成新的随机数据并更新
       const useRealFreq = document.getElementById('useRealFreq') && document.getElementById('useRealFreq').checked;
       const isExternalCrop = sptmCharts.options.externalDataCrop;
-      
+
       const datainfo = bandConfig.map((band, index) => {
         // 全量范围
         const fullStartFreq = band.start * 1000000;
