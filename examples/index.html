@@ -514,8 +514,9 @@
         </label>
         <label class="draw-mode-label" style="cursor:pointer;">
           <input type="checkbox" id="useSingleFullData" style="margin-right:4px;">
-          单条完整数据(自动分段)
+          单条完整数据
         </label>
+        <span id="singleFullDataStatus" style="color:#239ee7;font-size:12px;display:none;">当前: 传入单条完整数据</span>
       </div>
       <div id="bandList" class="band-list"></div>
       <div class="band-actions">
@@ -560,13 +561,7 @@
         <span class="interval-label">循环间隔时间(ms):</span>
         <input type="number" id="drawInterval" value="20" min="1" max="10000" class="interval-input">
       </div>
-      <div id="singleFullDataRow" class="draw-mode-row" style="margin-top:8px; display:none;">
-        <label class="draw-mode-label" style="cursor:pointer;">
-          <input type="checkbox" id="useSingleFullData" style="margin-right:4px;">
-          单条完整数据(自动分段)
-        </label>
-        <span id="singleFullDataStatus" style="color:#239ee7;font-size:12px;">当前: 传入单条完整数据，由图表自动分段</span>
-      </div>
+
     </div>
     </div>
   </div>
@@ -735,7 +730,7 @@
       let datas1 = {
         "id": 1,
         "type": "FFT",
-        "visibility": true,
+        "visible": true,
         "point": 1600,
         "name": "Trace1",
         "color": "blue",
@@ -753,7 +748,7 @@
       let datas2 = {
         "id": 2,
         "type": "FFT",
-        "visibility": true,
+        "visible": true,
         "point": 1600,
         "name": "峰值",
         "color": "#ff0000",
@@ -771,7 +766,7 @@
       let datas3 = {
         "id": 3,
         "type": "FFT",
-        "visibility": true,
+        "visible": true,
         "point": 1600,
         "name": "平均",
         "color": "#00ff00",
@@ -792,7 +787,7 @@
       let datas4 = {
         "id": 4,
         "type": "FFT",
-        "visibility": true,
+        "visible": true,
         "point": 1600,
         "name": "Trace4",
         "color": "#ff0000",
@@ -1036,7 +1031,7 @@
       let testData = {
         "id": 5,
         "type": "FFT",
-        "visibility": true,
+        "visible": true,
         "point": pointCount,
         "name": "真实频率",
         "color": "#00bcd4",
@@ -1105,7 +1100,7 @@
       let traceData = {
         "id": traceId,
         "type": "FFT",
-        "visibility": isVisible,
+        "visible": isVisible,
         "point": 1600,
         "name": traceName,
         "color": color,
@@ -1141,7 +1136,7 @@
       sptmCharts.addTrace({
         "id": 100,
         "type": "FFT",
-        "visibility": true,
+        "visible": true,
         "point": pointCount,
         "name": "真实频率(偏移)",
         "color": "#e91e63",
@@ -1161,7 +1156,7 @@
       sptmCharts.addTrace({
         "id": 101,
         "type": "FFT",
-        "visibility": true,
+        "visible": true,
         "point": pointCount,
         "name": "等间隔对比",
         "color": "#4caf50",
@@ -1341,17 +1336,14 @@
         mode === 'fft' ? '当前模式: FFT 单频' : '当前模式: DScan 频段';
       const bandConfigArea = document.getElementById('bandConfigArea');
       const fftConfigArea = document.getElementById('fftConfigArea');
-      const singleFullDataRow = document.getElementById('singleFullDataRow');
       if (mode === 'fft') {
         if (bandConfigArea) bandConfigArea.style.display = 'none';
         if (fftConfigArea) fftConfigArea.style.display = 'block';
-        if (singleFullDataRow) singleFullDataRow.style.display = 'none';
         // 切换到FFT模式时更新图表
         updateChartFFTSettings();
       } else {
         if (bandConfigArea) bandConfigArea.style.display = 'block';
         if (fftConfigArea) fftConfigArea.style.display = 'none';
-        if (singleFullDataRow) singleFullDataRow.style.display = 'flex';
         // 切换到DScan模式时更新图表
         updateChartDScanSettings();
       }
@@ -1497,24 +1489,23 @@
         const endFreq = band.end * 1000000;
         const freqStep = (endFreq - startFreq) / (band.point - 1);
         const data = generateNumbersWithDominantMiddle(band.point, -20, 100);
+        const freqData = [];
+        for (let i = 0; i < band.point; i++) {
+          const baseFreq = startFreq + i * freqStep;
+          const sineOffset = useRealFreq ? Math.sin(i / band.point * Math.PI * 12) * (freqStep * 0.3) : 0;
+          const randomOffset = useRealFreq ? (Math.random() - 0.5) * (freqStep * 0.2) : 0;
+          const freq = Math.round(baseFreq + sineOffset + randomOffset);
+          freqData.push(Math.max(startFreq, Math.min(endFreq, freq)));
+        }
         const info = {
           point: band.point,
           step: 200000000,
           start_freq: startFreq,
           end_freq: endFreq,
           width: 1,
-          data: data
+          data: data,
+          freq_data: freqData
         };
-        if (useRealFreq) {
-          const freqData = [];
-          for (let i = 0; i < band.point; i++) {
-            const baseFreq = startFreq + i * freqStep;
-            const sineOffset = Math.sin(i / band.point * Math.PI * 12) * (freqStep * 0.3);
-            const randomOffset = (Math.random() - 0.5) * (freqStep * 0.2);
-            freqData.push(Math.round(baseFreq + sineOffset + randomOffset));
-          }
-          info.freq_data = freqData;
-        }
         return info;
       });
 
@@ -1522,7 +1513,7 @@
       const traceData = {
         id: 4,
         type: 'FFT',
-        visibility: true,
+        visible: true,
         point: datainfo.reduce((sum, item) => sum + item.point, 0),
         name: 'DScan频段',
         color: color,
@@ -1563,7 +1554,7 @@
       const traceData = {
         id: 4,
         type: 'FFT',
-        visibility: true,
+        visible: true,
         point: 1600,
         name: 'FFT单频',
         color: color,
@@ -1640,7 +1631,7 @@
         doDScanDraw();
       }
     }
-
+    let consoleLogCount = 0;
     function doFFTDraw() {
       const traces = sptmCharts.getTraces ? sptmCharts.getTraces() : [];
       if (traces.length === 0) return;
@@ -1664,7 +1655,8 @@
         const baseFreq = fullStartFreq + i * fullFreqStep;
         const sineOffset = Math.sin(i / fullPointCount * Math.PI * 12) * (fullFreqStep * 0.3);
         const randomOffset = (Math.random() - 0.5) * (fullFreqStep * 0.2);
-        fullFreqData.push(Math.round(baseFreq + sineOffset + randomOffset));
+        const freq = Math.round(baseFreq + sineOffset + randomOffset);
+        fullFreqData.push(Math.max(fullStartFreq, Math.min(fullEndFreq, freq)));
       }
       
       // 裁剪范围
@@ -1673,134 +1665,16 @@
       let startIndex = 0;
       let endIndex = fullPointCount;
       
-      if (sptmCharts.options.externalDataCrop && sptmCharts.xLabelGridInfo && sptmCharts.xLabelGridInfo.length > 0) {
+      // 优先从图表获取当前显示范围（无论 externalDataCrop 是否开启）
+      if (sptmCharts.xLabelGridInfo && sptmCharts.xLabelGridInfo.length > 0) {
         const labelInfo = sptmCharts.xLabelGridInfo[0];
         showStartFreq = labelInfo.show_start_freq;
         showEndFreq = labelInfo.show_end_freq;
-        
-        // 在全量频率数组中找到裁剪范围的索引
-        for (let i = 0; i < fullPointCount; i++) {
-          if (fullFreqData[i] >= showStartFreq) {
-            startIndex = i;
-            break;
-          }
-        }
-        for (let i = fullPointCount - 1; i >= 0; i--) {
-          if (fullFreqData[i] <= showEndFreq) {
-            endIndex = i + 1;
-            break;
-          }
-        }
-        
-        // 确保至少有一个点
-        if (endIndex <= startIndex) {
-          endIndex = startIndex + 1;
-        }
       }
       
-      // 截取数据
-      const croppedData = fullData.slice(startIndex, endIndex);
-      const croppedFreqData = fullFreqData.slice(startIndex, endIndex);
-      
-      const datainfo = [
-        {
-          point: croppedData.length,
-          step: 200000000,
-          start_freq: showStartFreq,
-          end_freq: showEndFreq,
-          width: 1,
-          data: croppedData,
-          freq_data: croppedFreqData
-        }
-      ];
-      
-      // 更新所有存在的trace
-      traces.forEach(trace => {
-        sptmCharts.setTraceData(trace.id, datainfo);
-      });
-    }
-
-    function doDScanDraw() {
-      const traces = sptmCharts.getTraces ? sptmCharts.getTraces() : [];
-      if (traces.length === 0) return;
-
-      // 检查是否使用单条完整数据模式
-      const useSingleFullData = document.getElementById('useSingleFullData') && document.getElementById('useSingleFullData').checked;
-      const statusEl = document.getElementById('singleFullDataStatus');
-      if (statusEl) {
-        statusEl.style.display = useSingleFullData ? 'inline' : 'none';
-        statusEl.textContent = useSingleFullData ? '当前: 传入单条完整数据，由图表自动分段' : '';
-      }
-
-      if (useSingleFullData) {
-        // 单条完整数据模式：生成覆盖整个 dscan_freq 范围的完整数据
-        const dscanFreq = sptmCharts.options.xaxis.dscan_freq;
-        if (!dscanFreq || dscanFreq.length === 0) return;
-
-        const totalStartFreq = dscanFreq[0].start_freq;
-        const totalEndFreq = dscanFreq[dscanFreq.length - 1].end_freq;
-        const totalPointCount = 3200; // 总点数，可以根据需要调整
-
-        // 生成完整数据
-        const fullData = generateNumbersWithDominantMiddle(totalPointCount, -20, 100);
-        const fullFreqStep = (totalEndFreq - totalStartFreq) / (totalPointCount - 1);
-        const fullFreqData = [];
-        for (let i = 0; i < totalPointCount; i++) {
-          const baseFreq = totalStartFreq + i * fullFreqStep;
-          const sineOffset = Math.sin(i / totalPointCount * Math.PI * 12) * (fullFreqStep * 0.3);
-          const randomOffset = (Math.random() - 0.5) * (fullFreqStep * 0.2);
-          fullFreqData.push(Math.round(baseFreq + sineOffset + randomOffset));
-        }
-
-        const datainfo = [{
-          point: totalPointCount,
-          step: 200000000,
-          start_freq: totalStartFreq,
-          end_freq: totalEndFreq,
-          width: 1,
-          data: fullData,
-          freq_data: fullFreqData
-        }];
-
-        // 更新所有存在的trace
-        traces.forEach(trace => {
-          sptmCharts.setTraceData(trace.id, datainfo);
-        });
-        return;
-      }
-
-      // 为每个频段生成新的随机数据并更新
-      const useRealFreq = document.getElementById('useRealFreq') && document.getElementById('useRealFreq').checked;
-      const isExternalCrop = sptmCharts.options.externalDataCrop;
-
-      const datainfo = bandConfig.map((band, index) => {
-        // 全量范围
-        const fullStartFreq = band.start * 1000000;
-        const fullEndFreq = band.end * 1000000;
-        const fullPointCount = band.point;
-        
-        // 先生成全量数据
-        const fullData = generateNumbersWithDominantMiddle(fullPointCount, -20, 100);
-        const fullFreqStep = (fullEndFreq - fullStartFreq) / (fullPointCount - 1);
-        const fullFreqData = [];
-        for (let i = 0; i < fullPointCount; i++) {
-          const baseFreq = fullStartFreq + i * fullFreqStep;
-          const sineOffset = Math.sin(i / fullPointCount * Math.PI * 12) * (fullFreqStep * 0.3);
-          const randomOffset = (Math.random() - 0.5) * (fullFreqStep * 0.2);
-          fullFreqData.push(Math.round(baseFreq + sineOffset + randomOffset));
-        }
-        
-        // 裁剪范围
-        let showStartFreq = fullStartFreq;
-        let showEndFreq = fullEndFreq;
-        let startIndex = 0;
-        let endIndex = fullPointCount;
-        
-        if (isExternalCrop && sptmCharts.xLabelGridInfo && sptmCharts.xLabelGridInfo[index]) {
-          const labelInfo = sptmCharts.xLabelGridInfo[index];
-          showStartFreq = labelInfo.show_start_freq;
-          showEndFreq = labelInfo.show_end_freq;
-          
+      if (sptmCharts.options.externalDataCrop && sptmCharts.xLabelGridInfo && sptmCharts.xLabelGridInfo.length > 0) {
+        // 当显示范围已覆盖完整数据时，跳过裁剪
+        if (showStartFreq > fullStartFreq || showEndFreq < fullEndFreq) {
           // 在全量频率数组中找到裁剪范围的索引
           for (let i = 0; i < fullPointCount; i++) {
             if (fullFreqData[i] >= showStartFreq) {
@@ -1820,27 +1694,282 @@
             endIndex = startIndex + 1;
           }
         }
-        
-        // 截取数据
-        const croppedData = fullData.slice(startIndex, endIndex);
-        const croppedFreqData = fullFreqData.slice(startIndex, endIndex);
-        
-        const info = {
+      }
+      
+      // 截取数据
+      const croppedData = fullData.slice(startIndex, endIndex);
+      const croppedFreqData = fullFreqData.slice(startIndex, endIndex);
+      
+      const datainfo = [
+        {
           point: croppedData.length,
           step: 200000000,
-          start_freq: showStartFreq,
-          end_freq: showEndFreq,
+          start_freq: fullStartFreq,
+          end_freq: fullEndFreq,
+          show_start_freq: showStartFreq,
+          show_end_freq: showEndFreq,
           width: 1,
-          data: croppedData
-        };
-        if (useRealFreq) {
-          info.freq_data = croppedFreqData;
+          data: croppedData,
+          freq_data: croppedFreqData
         }
-        return info;
-      });
-      
+      ];
+      consoleLogCount++;
       // 更新所有存在的trace
       traces.forEach(trace => {
+        if (consoleLogCount % 20 === 0){
+          console.log('频段频谱数据:是否有真实频率',useRealFreq, trace.id, datainfo);
+        }
+        sptmCharts.setTraceData(trace.id, datainfo);
+      });
+    }
+    function doDScanDraw() {
+      const traces = sptmCharts.getTraces ? sptmCharts.getTraces() : [];
+      if (traces.length === 0) return;
+
+      // 检查是否使用单条完整数据模式
+      const useSingleFullData = document.getElementById('useSingleFullData') && document.getElementById('useSingleFullData').checked;
+      const statusEl = document.getElementById('singleFullDataStatus');
+      if (statusEl) {
+        statusEl.style.display = useSingleFullData ? 'inline' : 'none';
+        statusEl.textContent = useSingleFullData ? '当前: 传入单条完整数据' : '';
+      }
+
+      const useRealFreq = document.getElementById('useRealFreq') && document.getElementById('useRealFreq').checked;
+      const isExternalCrop = sptmCharts.options.externalDataCrop;
+
+      // 计算点数分配：
+      // - 单条合并模式：总点数=第一段point，按跨度比例分配到各段
+      // - 默认模式：每段使用各自配置的point
+      let pointAllocations;
+      if (useSingleFullData) {
+        const spans = bandConfig.map(band => band.end - band.start);
+        const totalSpan = spans.reduce((sum, s) => sum + s, 0);
+        const totalPointCount = bandConfig[0]?.point || 1600;
+        let assigned = 0;
+        pointAllocations = spans.map(span => {
+          const pts = Math.floor(totalPointCount * span / totalSpan);
+          assigned += pts;
+          return pts;
+        });
+        if (pointAllocations.length > 0) {
+          pointAllocations[pointAllocations.length - 1] += (totalPointCount - assigned);
+        }
+      } else {
+        pointAllocations = bandConfig.map(band => band.point);
+      }
+
+      // 步骤1：生成各段强度数据和频率数据（严格限制在各自频段范围内）
+      const segments = (() => {
+        // 合并模式：只生成一次强度数组，然后按跨度比例分配给各段
+        if (useSingleFullData) {
+          const spans = bandConfig.map(band => band.end - band.start);
+          const totalSpan = spans.reduce((sum, s) => sum + s, 0);
+          const totalPointCount = bandConfig[0]?.point || 1600;
+          
+          // 只生成一次强度数组
+          const fullData = generateNumbersWithDominantMiddle(totalPointCount, -20, 100);
+          
+          // 计算各段分配的点数
+          let assigned = 0;
+          const pointAllocations = spans.map(span => {
+            const pts = Math.floor(totalPointCount * span / totalSpan);
+            assigned += pts;
+            return pts;
+          });
+          if (pointAllocations.length > 0) {
+            pointAllocations[pointAllocations.length - 1] += (totalPointCount - assigned);
+          }
+          
+          // 按频段截取强度子数组并生成频率
+          let dataOffset = 0;
+          return bandConfig.map((band, index) => {
+            const fullStartFreq = band.start * 1000000;
+            const fullEndFreq = band.end * 1000000;
+            const fullPointCount = pointAllocations[index];
+            
+            // 从总强度数组中截取对应部分
+            const segData = fullData.slice(dataOffset, dataOffset + fullPointCount);
+            dataOffset += fullPointCount;
+            
+            // 生成该段频率数据
+            const fullFreqStep = (fullEndFreq - fullStartFreq) / (fullPointCount - 1);
+            const fullFreqData = [];
+            for (let i = 0; i < fullPointCount; i++) {
+              const baseFreq = fullStartFreq + i * fullFreqStep;
+              const sineOffset = Math.sin(i / fullPointCount * Math.PI * 12) * (fullFreqStep * 0.3);
+              const randomOffset = (Math.random() - 0.5) * (fullFreqStep * 0.2);
+              const freq = Math.round(baseFreq + sineOffset + randomOffset);
+              fullFreqData.push(Math.max(fullStartFreq, Math.min(fullEndFreq, freq)));
+            }
+            
+            return {
+              start_freq: fullStartFreq,
+              end_freq: fullEndFreq,
+              pointCount: fullPointCount,
+              data: segData,
+              freq_data: fullFreqData
+            };
+          });
+        }
+        
+        // 默认模式：每段分别生成强度数据和频率数据
+        return bandConfig.map((band, index) => {
+          const fullStartFreq = band.start * 1000000;
+          const fullEndFreq = band.end * 1000000;
+          const fullPointCount = pointAllocations[index];
+          
+          const fullData = generateNumbersWithDominantMiddle(fullPointCount, -20, 100);
+          
+          // 生成该段频率数据（严格限制在频段范围内，避免越界）
+          const fullFreqStep = (fullEndFreq - fullStartFreq) / (fullPointCount - 1);
+          const fullFreqData = [];
+          for (let i = 0; i < fullPointCount; i++) {
+            const baseFreq = fullStartFreq + i * fullFreqStep;
+            const sineOffset = Math.sin(i / fullPointCount * Math.PI * 12) * (fullFreqStep * 0.3);
+            const randomOffset = (Math.random() - 0.5) * (fullFreqStep * 0.2);
+            // 严格限制在频段范围内，避免越界
+            const freq = Math.round(baseFreq + sineOffset + randomOffset);
+            fullFreqData.push(Math.max(fullStartFreq, Math.min(fullEndFreq, freq)));
+          }
+          
+          return {
+            start_freq: fullStartFreq,
+            end_freq: fullEndFreq,
+            pointCount: fullPointCount,
+            data: fullData,
+            freq_data: fullFreqData
+          };
+        });
+      })();
+
+      // 步骤2：根据 useSingleFullData 决定数据结构并应用裁剪
+      let datainfo;
+      
+      if (useSingleFullData) {
+        // 合并为单条数据
+        const allData = [];
+        const allFreqData = [];
+        let totalStartFreq = Infinity;
+        let totalEndFreq = -Infinity;
+        
+        segments.forEach(seg => {
+          allData.push(...seg.data);
+          allFreqData.push(...seg.freq_data);
+          totalStartFreq = Math.min(totalStartFreq, seg.start_freq);
+          totalEndFreq = Math.max(totalEndFreq, seg.end_freq);
+        });
+        
+        // 根据 externalDataCrop 截取显示范围
+        let startIndex = 0;
+        let endIndex = allData.length;
+        let showStartFreq = totalStartFreq;
+        let showEndFreq = totalEndFreq;
+        
+        // 优先从图表获取当前显示范围（无论 externalDataCrop 是否开启）
+        if (sptmCharts.xLabelGridInfo && sptmCharts.xLabelGridInfo.length > 0) {
+          const labelInfo = sptmCharts.xLabelGridInfo[0];
+          showStartFreq = labelInfo.show_start_freq;
+          showEndFreq = labelInfo.show_end_freq;
+        }
+        
+        if (isExternalCrop && sptmCharts.xLabelGridInfo && sptmCharts.xLabelGridInfo.length > 0) {
+          // 当显示范围已覆盖完整数据时，跳过裁剪
+          if (showStartFreq > totalStartFreq || showEndFreq < totalEndFreq) {
+            for (let i = 0; i < allFreqData.length; i++) {
+              if (allFreqData[i] >= showStartFreq) {
+                startIndex = i;
+                break;
+              }
+            }
+            for (let i = allFreqData.length - 1; i >= 0; i--) {
+              if (allFreqData[i] <= showEndFreq) {
+                endIndex = i + 1;
+                break;
+              }
+            }
+            if (endIndex <= startIndex) {
+              endIndex = startIndex + 1;
+            }
+          }
+        }
+        
+        const croppedData = allData.slice(startIndex, endIndex);
+        const croppedFreqData = allFreqData.slice(startIndex, endIndex);
+        
+        datainfo = [{
+          point: croppedData.length,
+          step: 200000000,
+          start_freq: totalStartFreq,
+          end_freq: totalEndFreq,
+          show_start_freq: showStartFreq,
+          show_end_freq: showEndFreq,
+          width: 1,
+          data: croppedData,
+          freq_data: croppedFreqData
+        }];
+      } else {
+        // 默认模式：每段分别处理，根据 externalDataCrop 截取
+        datainfo = segments.map((seg, index) => {
+          let startIndex = 0;
+          let endIndex = seg.data.length;
+          let showStartFreq = seg.start_freq;
+          let showEndFreq = seg.end_freq;
+          
+          // 优先从图表获取当前显示范围（无论 externalDataCrop 是否开启）
+          if (sptmCharts.xLabelGridInfo && sptmCharts.xLabelGridInfo[index]) {
+            const labelInfo = sptmCharts.xLabelGridInfo[index];
+            showStartFreq = labelInfo.show_start_freq;
+            showEndFreq = labelInfo.show_end_freq;
+          }
+          
+          if (isExternalCrop && sptmCharts.xLabelGridInfo && sptmCharts.xLabelGridInfo[index]) {
+            const labelInfo = sptmCharts.xLabelGridInfo[index];
+            showStartFreq = labelInfo.show_start_freq;
+            showEndFreq = labelInfo.show_end_freq;
+            
+            if (showStartFreq > seg.start_freq || showEndFreq < seg.end_freq) {
+              for (let i = 0; i < seg.freq_data.length; i++) {
+                if (seg.freq_data[i] >= showStartFreq) {
+                  startIndex = i;
+                  break;
+                }
+              }
+              for (let i = seg.freq_data.length - 1; i >= 0; i--) {
+                if (seg.freq_data[i] <= showEndFreq) {
+                  endIndex = i + 1;
+                  break;
+                }
+              }
+              if (endIndex <= startIndex) {
+                endIndex = startIndex + 1;
+              }
+            }
+          }
+          
+          const croppedData = seg.data.slice(startIndex, endIndex);
+          const croppedFreqData = seg.freq_data.slice(startIndex, endIndex);
+          
+          const info = {
+            point: croppedData.length,
+            step: 200000000,
+            start_freq: seg.start_freq,
+            end_freq: seg.end_freq,
+            show_start_freq: showStartFreq,
+            show_end_freq: showEndFreq,
+            width: 1,
+            data: croppedData,
+            freq_data: croppedFreqData
+          };
+          return info;
+        });
+      }
+      consoleLogCount++;
+      // 步骤3：统一调用 setTraceData
+      traces.forEach(trace => {
+        if (consoleLogCount % 50 === 0){
+          const freqCounts = useSingleFullData ? segments.map(seg => seg.pointCount) : datainfo.map(d => d.point);
+          console.log('频段频谱数据:是否有真实频率', trace.id, datainfo, '每段频率个数:', freqCounts);
+        }
         sptmCharts.setTraceData(trace.id, datainfo);
       });
     }

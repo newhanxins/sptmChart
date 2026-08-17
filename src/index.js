@@ -78,6 +78,9 @@ class sptmChart {
     this._fpsLastCalcTime = 0;   // 上次计算FPS的时间
     this._fpsLastDataSig = null; // DScan模式下data[0].data的上一帧签名
     //=====================================
+    //========== 鼠标真实频率缓存 ==========
+    this._mouseRealFreq = null;    // 鼠标当前对应的真实频率
+    //=====================================
     this._init();
     // 绑定并保存事件回调引用，以便 destroy() 时正确移除
     this._boundHandleMousedown = this._handleMousedown.bind(this);
@@ -95,6 +98,8 @@ class sptmChart {
     // 节流处理：限制重绘频率（16ms ≈ 60FPS，保证流畅度）
     this._throttledScheduleDraw = throttle(() => this._scheduleDraw(), 16);
     this._throttledHandleZoom = throttle((event, delta) => this._handleZoom(event, delta), 16);
+    // 平移回调节流：限制触发频率，避免高频回调
+    this._throttledTriggerXRangeChange = throttle((type, source, order) => this._triggerXRangeChange(type, source, order), 100);
 
     this.canvas.addEventListener('mousedown', this._boundHandleMousedown);
     this.canvas.addEventListener('mouseup', this._boundHandleMouseup);
@@ -174,6 +179,17 @@ class sptmChart {
   _freqToX(freq){
     if(!this.xLabelGridInfo||this.xLabelGridInfo.length===0)return null;
     
+    // dscan_merge_data 合并模式：通过数据点索引计算X坐标
+    if(this.options.xaxis?.dscan_merge_data && this.xLabelGridInfo.length>0){
+      const labelInfo = this.xLabelGridInfo[0];
+      const mergedDataInfo = this._getMergedDataInfo();
+      if(mergedDataInfo.hasRealFreq && mergedDataInfo.totalPoints > 1){
+        const pointIndex = this._findPointIndexByFreq(mergedDataInfo.freqs, freq);
+        const stepPx = labelInfo.width / (mergedDataInfo.totalPoints - 1);
+        return this.options.grid.left + labelInfo.start_x + pointIndex * stepPx;
+      }
+    }
+    
     for(let i=0;i<this.xLabelGridInfo.length;i++){
       const info=this.xLabelGridInfo[i];
       if(freq>=info.show_start_freq && freq<=info.show_end_freq){
@@ -192,6 +208,19 @@ class sptmChart {
     if(!this.xLabelGridInfo||this.xLabelGridInfo.length===0)return null;
     
     const relativeX=x-this.options.grid.left;
+    
+    // dscan_merge_data 合并模式：通过像素位置计算数据点索引获取真实频率
+    if(this.options.xaxis?.dscan_merge_data && this.xLabelGridInfo.length>0){
+      const labelInfo = this.xLabelGridInfo[0];
+      const mergedDataInfo = this._getMergedDataInfo();
+      if(mergedDataInfo.hasRealFreq && mergedDataInfo.totalPoints > 1){
+        const pointRelX = relativeX - labelInfo.start_x;
+        const stepPx = labelInfo.width / (mergedDataInfo.totalPoints - 1);
+        let pointIndex = Math.round(pointRelX / stepPx);
+        pointIndex = Math.max(0, Math.min(mergedDataInfo.totalPoints - 1, pointIndex));
+        return mergedDataInfo.freqs[pointIndex];
+      }
+    }
     
     for(let i=0;i<this.xLabelGridInfo.length;i++){
       const info=this.xLabelGridInfo[i];
@@ -1468,79 +1497,6 @@ class sptmChart {
     //恢复线样式
     this.ctx.setLineDash([]);
     
-    // 绘制DScan合并数据模式频段分界线
-    const dividerConfig = this.options.xaxis?.dscan_divider;
-    if (this.options.type === 'DScan' && dividerConfig?.visible&&this.options.xaxis?.dscan_merge_data) {
-      this.ctx.save();
-      this.ctx.strokeStyle = dividerConfig.color || 'green';
-      this.ctx.lineWidth = dividerConfig.width || 2;
-      // 根据 line_dash 设置线型
-      this.ctx.setLineDash(dividerConfig.line_dash || []);
-      
-      let dividerLines = [];
-      
-      // 合并模式：根据 _dividerFreqs 中记录的分界频率计算分割线位置
-      if (this.xLabelGridInfo.length > 0 && this.xLabelGridInfo[0]._dividerFreqs) {
-        const labelInfo = this.xLabelGridInfo[0];
-        const totalRange = labelInfo.show_end_freq - labelInfo.show_start_freq;
-        if (totalRange > 0) {
-          for (let i = 0; i < labelInfo._dividerFreqs.length; i++) {
-            const divider = labelInfo._dividerFreqs[i];
-            const freq = divider.end_freq;
-            const ratio = (freq - labelInfo.show_start_freq) / totalRange;
-            const dividerX = this.options.grid.left + ratio * labelInfo.width;
-            dividerLines.push({
-              x: dividerX,
-              freq1: divider.end_freq,
-              freq2: divider.start_freq
-            });
-          }
-        }
-      }
-        
-      // 绘制分割线及标签
-      const labelPosition = dividerConfig.label_position || 'top';
-      for (let i = 0; i < dividerLines.length; i++) {
-        const line = dividerLines[i];
-        this.ctx.beginPath();
-        this.ctx.moveTo(line.x, this.options.grid.top);
-        this.ctx.lineTo(line.x, this.height - this.options.grid.bottom);
-        this.ctx.stroke();
-
-        // 绘制频率标签
-        if (dividerConfig.label_two_line !== undefined) {
-          this.ctx.fillStyle = dividerConfig.color || 'green';
-          this.ctx.font = `${this.options.xaxis?.text_font_size || 12}px ${this.options.xaxis?.text_font_family || 'Arial'}`;
-          this.ctx.textAlign = 'center';
-          this.ctx.textBaseline = 'middle';
-          
-          // 根据 label_position 计算标签 Y 坐标
-          let labelY;
-          if (labelPosition === 'bottom') {
-            labelY = this.height - this.options.grid.bottom + 15;
-          } else {
-            labelY = this.options.grid.top - 10;
-          }
-          
-          if (dividerConfig.label_two_line) {
-            this.ctx.fillText(`${line.freq1 / 1000000}`, line.x, labelPosition === 'bottom' ? labelY + 5 : labelY);
-            if (line.freq2 !== undefined) {
-              this.ctx.fillText(`${line.freq2 / 1000000}`, line.x, labelPosition === 'bottom' ? labelY + 20 : labelY + 15);
-            }
-          } else {
-            if (line.freq2 !== undefined) {
-                  this.ctx.fillText(`${line.freq1 / 1000000}/${line.freq2 / 1000000}`, line.x, labelY + 5);
-            } else {
-              this.ctx.fillText(`${line.freq1 / 1000000}`, line.x, labelY + 5);
-            }
-          }
-        }
-      }
-     
-      
-      this.ctx.restore();
-    }
-    
     // 绘制中心线
     if(this.options.grid.center_line_show){
       this.ctx.strokeStyle = this.options.grid.center_color;
@@ -1553,15 +1509,96 @@ class sptmChart {
   }
   
   /**
+   * 绘制DScan合并模式频段分界线
+   * 需在 _drawTraces 完成后调用，此时 drawStepPx 已计算
+   */
+  _drawDScanDividers(){
+    const dividerConfig = this.options.xaxis?.dscan_divider;
+    if (this.options.type !== 'DScan' || !dividerConfig?.visible || !this.options.xaxis?.dscan_merge_data) {
+      return;
+    }
+    
+    this.ctx.save();
+    this.ctx.strokeStyle = dividerConfig.color || 'green';
+    this.ctx.lineWidth = dividerConfig.width || 2;
+    this.ctx.setLineDash(dividerConfig.line_dash || []);
+    
+    let dividerLines = [];
+    
+    if (this.xLabelGridInfo.length > 0 && this.xLabelGridInfo[0]._dividerFreqs) {
+      const labelInfo = this.xLabelGridInfo[0];
+      
+      for (let i = 0; i < labelInfo._dividerFreqs.length; i++) {
+        const divider = labelInfo._dividerFreqs[i];
+        const freq = divider.end_freq;
+        
+        if (freq < labelInfo.show_start_freq || freq > labelInfo.show_end_freq) {
+          continue;
+        }
+        
+        // 使用 _freqToX 计算分割线位置（基于裁剪/抽点后的绘制数据）
+        const dividerX = this._freqToX(freq);
+        
+        if (dividerX !== null && dividerX >= this.options.grid.left && dividerX <= this.options.grid.left + this.chartWidth) {
+          dividerLines.push({
+            x: dividerX,
+            freq1: divider.end_freq,
+            freq2: divider.start_freq
+          });
+        }
+      }
+    }
+    
+    // 绘制分割线及标签
+    const labelPosition = dividerConfig.label_position || 'top';
+    for (let i = 0; i < dividerLines.length; i++) {
+      const line = dividerLines[i];
+      this.ctx.beginPath();
+      this.ctx.moveTo(line.x, this.options.grid.top);
+      this.ctx.lineTo(line.x, this.height - this.options.grid.bottom);
+      this.ctx.stroke();
+      
+      if (dividerConfig.label_two_line !== undefined) {
+        this.ctx.fillStyle = dividerConfig.color || 'green';
+        this.ctx.font = `${this.options.xaxis?.text_font_size || 12}px ${this.options.xaxis?.text_font_family || 'Arial'}`;
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        
+        let labelY;
+        if (labelPosition === 'bottom') {
+          labelY = this.height - this.options.grid.bottom + 15;
+        } else {
+          labelY = this.options.grid.top - 10;
+        }
+        
+        if (dividerConfig.label_two_line) {
+          this.ctx.fillText(`${line.freq1 / 1000000}`, line.x, labelPosition === 'bottom' ? labelY + 5 : labelY);
+          if (line.freq2 !== undefined) {
+            this.ctx.fillText(`${line.freq2 / 1000000}`, line.x, labelPosition === 'bottom' ? labelY + 20 : labelY + 15);
+          }
+        } else {
+          if (line.freq2 !== undefined) {
+            this.ctx.fillText(`${line.freq1 / 1000000}/${line.freq2 / 1000000}`, line.x, labelY + 5);
+          } else {
+            this.ctx.fillText(`${line.freq1 / 1000000}`, line.x, labelY + 5);
+          }
+        }
+      }
+    }
+    
+    this.ctx.restore();
+  }
+  
+  /**
    * 绘制画布
   */
   _draw(){
-    this._clearCanvas();
-    this._drawAxis();
-    this._drawGrid();
-    this._drawLegend();
-    this._drawTraces();
-    this._drawOther();
+    this._clearCanvas();// 清除画布
+    this._drawAxis();// 绘制坐标轴
+    this._drawGrid();// 绘制网格
+    this._drawLegend();// 绘制图例
+    this._drawTraces();// 绘制谱线
+    this._drawOther();// 绘制其他元素
     //绘制Markers
     this._drawMarkers();
     // 绘制中心频率信息框
@@ -1875,8 +1912,26 @@ class sptmChart {
     // 当 externalDataCrop 为 true 时，跳过内部裁剪，直接绘制传入的全部数据点
     if (!this.options.externalDataCrop) {
       if(labelInfo.start_freq!==labelInfo.show_start_freq||labelInfo.end_freq!==labelInfo.show_end_freq){
-        let startOrder=Math.floor((labelInfo.show_start_freq-labelInfo.start_freq)*data.point/(labelInfo.end_freq-labelInfo.start_freq));
-        let endOrder=Math.floor((labelInfo.show_end_freq-labelInfo.start_freq)*data.point/(labelInfo.end_freq-labelInfo.start_freq));
+        let startOrder, endOrder;
+        // dscan_merge_data 模式：使用点索引映射（而非频率线性映射），
+        // 因为合并数据可能存在频段间隙，频率线性映射会导致错误（如间隙中的频率不存在数据点）
+        if(this.options.xaxis?.dscan_merge_data && data._freqs && data._freqs.length>0){
+          startOrder=this._findPointIndexByFreq(data._freqs, labelInfo.show_start_freq);
+          endOrder=this._findPointIndexByFreq(data._freqs, labelInfo.show_end_freq);
+          if(endOrder<=startOrder){
+            endOrder=startOrder+1;
+          }
+        }else{
+          // 非合并模式：使用频率线性映射到点索引
+          startOrder=Math.floor((labelInfo.show_start_freq-labelInfo.start_freq)*data.point/(labelInfo.end_freq-labelInfo.start_freq));
+          endOrder=Math.floor((labelInfo.show_end_freq-labelInfo.start_freq)*data.point/(labelInfo.end_freq-labelInfo.start_freq));
+        }
+        // 限制索引范围在有效区间内，避免负数或越界导致空数组
+        startOrder=Math.max(0, Math.min(data.point - 1, startOrder));
+        endOrder=Math.max(0, Math.min(data.point, endOrder));
+        if(endOrder<=startOrder){
+          endOrder=startOrder+1;
+        }
         data.drawData=data.data.slice(startOrder,endOrder);
         // 同步截取 _freqs
         if(data._freqs&&data._freqs.length>0){
@@ -1890,12 +1945,33 @@ class sptmChart {
       data.lineType='pointline';
       let pointdata=extractTwoPolesTraceLine(data.drawData,data.drawData.length,drawWidth);
       data.drawData=pointdata;
-      // data._freqs 保持原始一维数组，不抽点
     }else if(data.drawData.length===drawWidth){
       data.lineType='line';
     }else{
       data.lineType='step';
     }
+    
+    // 保存绘制数据到原始对象，用于 getMouseVal 等交互计算
+    let saveDrawData, saveFreqs;
+    if(data.lineType === 'pointline' && data.drawData && data.drawData.targetData){
+      saveDrawData = data.drawData.targetData;
+      if(data._freqs && data._freqs.length > 0 && data.drawData.dataIndex){
+        saveFreqs = data.drawData.dataIndex.map(idx => {
+          const midIdx = Math.round((idx[0] + idx[1]) / 2);
+          return data._freqs[midIdx];
+        });
+      } else {
+        saveFreqs = data._freqs;
+      }
+    } else {
+      saveDrawData = data.drawData;
+      saveFreqs = data._freqs;
+    }
+    lineData.datainfo[order].drawData = saveDrawData;
+    lineData.datainfo[order]._drawnFreqs = saveFreqs;
+    
+    // 绘制DScan分割线（合并模式下），需在_drawLine之前调用以确保分割线在谱线下方
+    this._drawDScanDividers();
     
     this._drawLine(data);
   }
@@ -2070,24 +2146,25 @@ class sptmChart {
         this._fpsCurrentValue = this._fpsTimestamps.length;
       }
     }
-    // DScan 模式：单条完整数据自动分段（仅当未启用 dscan_merge_data 时）
-    if (this.options.type === 'DScan' && !this.options.xaxis?.dscan_merge_data && Array.isArray(data) && data.length === 1) {
-      const singleData = data[0];
-      const dscanFreq = this.options.xaxis?.dscan_freq;
-      if (dscanFreq && dscanFreq.length > 1 && singleData && singleData.data && singleData.data.length > 0
-          && typeof singleData.start_freq === 'number' && typeof singleData.end_freq === 'number') {
-        // 检查单条数据是否覆盖了整个 dscan_freq 范围
-        const totalStartFreq = dscanFreq[0].start_freq;
-        const totalEndFreq = dscanFreq[dscanFreq.length - 1].end_freq;
-        // 如果单条数据覆盖了整个 dscan_freq 范围，则自动分段
-        if (singleData.start_freq <= totalStartFreq && singleData.end_freq >= totalEndFreq) {
-          const segmentedData = this._segmentDScanData(singleData, dscanFreq);
-          if (segmentedData) {
-            data = segmentedData;
-          }
-        }
-      }
-    }
+    // // DScan 模式：单条完整数据自动分段（仅当未启用 dscan_merge_data 时）
+    // // 注：一般场景下 dscan_freq 只有一段，无需自动分段；多频段场景建议外部传入多条数据
+    // if (this.options.type === 'DScan' && !this.options.xaxis?.dscan_merge_data && Array.isArray(data) && data.length === 1) {
+    //   const singleData = data[0];
+    //   const dscanFreq = this.options.xaxis?.dscan_freq;
+    //   if (dscanFreq && dscanFreq.length > 1 && singleData && singleData.data && singleData.data.length > 0
+    //       && typeof singleData.start_freq === 'number' && typeof singleData.end_freq === 'number') {
+    //     // 检查单条数据是否覆盖了整个 dscan_freq 范围
+    //     const totalStartFreq = dscanFreq[0].start_freq;
+    //     const totalEndFreq = dscanFreq[dscanFreq.length - 1].end_freq;
+    //     // 如果单条数据覆盖了整个 dscan_freq 范围，则自动分段
+    //     if (singleData.start_freq <= totalStartFreq && singleData.end_freq >= totalEndFreq) {
+    //       const segmentedData = this._segmentDScanData(singleData, dscanFreq);
+    //       if (segmentedData) {
+    //         data = segmentedData;
+    //       }
+    //     }
+    //   }
+    // }
     for (let i = 0; i < this.tracesData.length; i++) {
       if (this.tracesData[i].id === id) {
         if (this.options.chart_type === 'waterfall') {
@@ -2120,7 +2197,52 @@ class sptmChart {
             }
           }
           this.tracesData[i].datainfo=data;
-          // X轴范围同步模式：根据传入数据的真实频率范围自动同步显示范围
+          // 步骤 1：FFT 模式下同步更新原始范围（不受 sync_axis_range 控制）
+          if (this.options.type === 'FFT' && this.xLabelGridInfo.length > 0) {
+            if (Array.isArray(data)) {
+              for (let dIdx = 0; dIdx < data.length; dIdx++) {
+                const d = data[dIdx];
+                if (!d) continue;
+                const order = dIdx;
+                if (order >= this.xLabelGridInfo.length) break;
+                if (d.start_freq !== undefined && d.end_freq !== undefined) {
+                  const labelInfo = this.xLabelGridInfo[order];
+                  if (labelInfo) {
+                    labelInfo.start_freq = d.start_freq;
+                    labelInfo.end_freq = d.end_freq;
+                    labelInfo.span = d.end_freq - d.start_freq;
+                    // 同步更新 options.center_freq 和 span，避免 _computeFFTLabels 重新计算时覆盖
+                    this.options.center_freq = d.start_freq + labelInfo.span / 2;
+                    this.options.span = labelInfo.span;
+                  }
+                }
+              }
+            }
+          }
+          // 步骤 2：使用外部传入的 show_start_freq/show_end_freq 设置显示范围（仅在 sync_axis_range 关闭时生效）
+          if (!this.options.xaxis?.sync_axis_range && this.xLabelGridInfo.length > 0) {
+            if (Array.isArray(data)) {
+              for (let dIdx = 0; dIdx < data.length; dIdx++) {
+                const d = data[dIdx];
+                if (!d) continue;
+                const order = dIdx;
+                if (order >= this.xLabelGridInfo.length) break;
+                if (d.show_start_freq !== undefined && d.show_end_freq !== undefined) {
+                  const labelInfo = this.xLabelGridInfo[order];
+                  if (labelInfo) {
+                    labelInfo.show_start_freq = d.show_start_freq;
+                    labelInfo.show_end_freq = d.show_end_freq;
+                    const newSpan = d.show_end_freq - d.show_start_freq;
+                    if (newSpan > 0) {
+                      labelInfo.draw_zoom_freq = d.show_start_freq + newSpan / 2;
+                      labelInfo.draw_zoom_span = newSpan;
+                    }
+                  }
+                }
+              }
+            }
+          }
+          // 步骤 3：X轴范围同步模式：根据传入数据的真实频率范围自动同步显示范围（权重高于 show_start_freq/show_end_freq）
           if (this.options.xaxis?.sync_axis_range && this.xLabelGridInfo.length > 0) {
             if (Array.isArray(data)) {
               for (let dIdx = 0; dIdx < data.length; dIdx++) {
@@ -2390,7 +2512,67 @@ class sptmChart {
       draw_zoom_span:xspan
     }];
   }
-  
+
+  /**
+   * 获取 dscan_merge_data 模式下的合并数据信息
+   * 用于从实际数据中提取频率数组和数据点总数
+   * @returns {Object} { data, freqs, totalPoints, hasRealFreq }
+   * @private
+   */
+  _getMergedDataInfo() {
+    for (let i = 0; i < this.tracesData.length; i++) {
+      const trace = this.tracesData[i];
+      if (trace.visible && trace.datainfo && trace.datainfo.length > 0) {
+        const dataInfo = trace.datainfo[0];
+        if (dataInfo && dataInfo.data && dataInfo.data.length > 0) {
+          // 优先使用裁剪/抽点后的绘制数据
+          const drawData = dataInfo.drawData || dataInfo.data;
+          const freqs = (dataInfo._drawnFreqs && dataInfo._drawnFreqs.length > 0) 
+            ? dataInfo._drawnFreqs 
+            : dataInfo._freqs || null;
+          return {
+            data: drawData,
+            freqs: freqs,
+            totalPoints: drawData ? drawData.length : 0,
+            hasRealFreq: freqs && freqs.length > 0
+          };
+        }
+      }
+    }
+    return { data: null, freqs: null, totalPoints: 0, hasRealFreq: false };
+  }
+
+  /**
+   * 根据频率值在 _freqs 数组中查找最接近的点索引
+   * 用于 dscan_merge_data 模式下将频率映射到点索引，
+   * 解决频段间隙处频率线性映射错误的问题
+   * @param {Array<number>} freqs - 真实频率数组
+   * @param {number} targetFreq - 目标频率
+   * @returns {number} 最接近的点索引
+   * @private
+   */
+  _findPointIndexByFreq(freqs, targetFreq) {
+    if (!freqs || freqs.length === 0) return 0;
+    // 边界检查：目标频率小于等于第一个频率，返回0
+    if (targetFreq <= freqs[0]) return 0;
+    // 边界检查：目标频率大于等于最后一个频率，返回最后一个索引
+    if (targetFreq >= freqs[freqs.length - 1]) return freqs.length - 1;
+
+    let left = 0, right = freqs.length - 1;
+    // 二分查找：确定目标频率所在区间
+    while (left < right) {
+      const mid = (left + right) >> 1;
+      if (freqs[mid] < targetFreq) left = mid + 1;
+      else right = mid;
+    }
+    // 比较左右邻近点，返回距离目标频率更近的索引
+    let nearestIdx = left;
+    if (left > 0 && Math.abs(freqs[left - 1] - targetFreq) <= Math.abs(freqs[left] - targetFreq)) {
+      nearestIdx = left - 1;
+    }
+    return nearestIdx;
+  }
+
   /**
    * 计算DScan标签
    * @private
@@ -2423,16 +2605,46 @@ class sptmChart {
       const labelCout=this.options.xaxis.number;
       const freqStep=xspan/(labelCout-1);
       const labelStepPx=this.chartWidth/(labelCout-1);
-      
-      if(startFreq&&freqStep){
-        let labels=[];
+
+      // dscan_merge_data 模式标签计算：使用点均匀分布采样实际频率
+      // 标签值从 _freqs 真实频率数组采样，而非频率线性插值，
+      // 避免频段间隙处出现不存在的数据频率
+      let labels=[];
+      // 获取合并数据的真实频率信息
+      const mergedDataInfo=this._getMergedDataInfo();
+      if(mergedDataInfo.hasRealFreq && mergedDataInfo.totalPoints>0){
+        const freqs=mergedDataInfo.freqs;
+        // 在真实频率数组中查找 startFreq/endFreq 对应的点索引
+        const startIdx=this._findPointIndexByFreq(freqs, startFreq);
+        const endIdx=this._findPointIndexByFreq(freqs, endFreq);
+        // 标签在可见点范围内均匀分布，直接从 _freqs 中抽取真实频率
+        // 由于 _freqs 只包含有效频段的数据点，无需额外过滤
         for(let j=0;j<labelCout;j++){
-          const xVal=startFreq+j*freqStep;
+          const pointIdx=startIdx+Math.round(j*(endIdx-startIdx)/(labelCout-1));
+          const clampedIdx=Math.max(0, Math.min(freqs.length-1, pointIdx));
+          const freqVal=freqs[clampedIdx];
           labels.push({
-            text:xVal/1000000,
+            text:freqVal/1000000,
             offsetx:labelStepPx*j
           });
         }
+      }else{
+        // 无真实频率数据：回退到频率线性插值
+        if(startFreq && freqStep){
+          for(let j=0;j<labelCout;j++){
+            const xVal=startFreq+j*freqStep;
+            // 跳过位于频段间隙(gap)的标签，避免显示无效频率
+            const isInValidBand=dscan_freq.some(band=>xVal>=band.start_freq && xVal<=band.end_freq);
+            if(!isInValidBand)continue;
+            labels.push({
+              text:xVal/1000000,
+              offsetx:labelStepPx*j
+            });
+          }
+        }
+      }
+      // console.log("x轴标签",labels);
+      if(labels.length>0){
         this.options.xaxis.labels.push(labels);
       }
       
@@ -2604,6 +2816,9 @@ class sptmChart {
       mouseupy:0,
       button:event.button
     }
+    // 初始化平移增量基准点
+    this.moveInfo.preX=event.offsetX;
+    this.moveInfo.preY=event.offsetY;
 
     // 瀑布图模式：在色系条区域按下鼠标，开始色系拖动
     if (this.options.chart_type === 'waterfall') {
@@ -2696,6 +2911,9 @@ class sptmChart {
           ...this.mousedownInfo,
           ...mousedowinfo
         }
+        // 重置 moveInfo，确保下次拖动从正确的起点开始计算
+        this.moveInfo.preX=0;
+        this.moveInfo.preY=0;
         this.ctx.canvas.style.cursor='default';
         break;
     }
@@ -2802,12 +3020,23 @@ class sptmChart {
               let minval=Math.round(labelInfo.show_start_freq-moveVal);
               let maxval=Math.round(labelInfo.show_end_freq-moveVal);
               if(minval>=labelInfo.start_freq&&maxval<=labelInfo.end_freq){
+                // dscan_merge_data 模式：平移边界对齐到实际数据点
+                if(this.options.xaxis?.dscan_merge_data && this.tracesData.length>0){
+                  const mergedDataInfo=this._getMergedDataInfo();
+                  if(mergedDataInfo.hasRealFreq){
+                    const freqs=mergedDataInfo.freqs;
+                    minval=freqs[this._findPointIndexByFreq(freqs, minval)];
+                    maxval=freqs[this._findPointIndexByFreq(freqs, maxval)];
+                  }
+                }
                 this.xLabelGridInfo[order].show_start_freq=minval;
                 this.xLabelGridInfo[order].show_end_freq=maxval;
                 let newCenter=minval+Math.floor((maxval-minval)/2);
                 this.xLabelGridInfo[order].draw_zoom_freq=newCenter;
                 this._updateMarkersPositionByFreq();
                 this._scheduleDrawChart();
+                console.log('X轴平移',minval,maxval,this.xLabelGridInfo[order]);
+                // this._throttledTriggerXRangeChange('pan', 'drag', order);
                 this._triggerXRangeChange('pan', 'drag', order);
               }
             }
@@ -2876,7 +3105,7 @@ class sptmChart {
           }
         }
         this._mouseRealFreq = realFreq;
-        //console.log(`[MouseMove] X轴频率: ${(mouseVal.x/1000000).toFixed(6)} MHz, 真实频率: ${(realFreq/1000000).toFixed(6)} MHz, 强度: ${intensity!==null?intensity.toFixed(2):'--'} dBμV`);
+        console.log(`[MouseMove] 位置:(${event.offsetX}, ${event.offsetY}), X轴频率: ${(mouseVal.x/1000000).toFixed(6)} MHz, 真实频率: ${(realFreq/1000000).toFixed(6)} MHz, 强度: ${intensity!==null?intensity.toFixed(2):'--'} dBμV`);
         if(sourceInfo.length>0){
           //console.table(sourceInfo);
         }
@@ -2908,6 +3137,7 @@ class sptmChart {
     this.moveInfo.preY=0;
     this.moveInfo.moveX=0;
     this.moveInfo.moveY=0;
+    this._mouseRealFreq=null;
   }
 
   // ========== 移动端触控事件处理（Touch事件映射到Mouse事件）==========
@@ -3338,16 +3568,13 @@ class sptmChart {
     
     // 构建文本内容
     const lines = [];
-    // 真实频率显示（如果有）
+    // 真实频率显示：优先使用从真实频率数组中查找的频率
     const hasRealFreq = this._mouseRealFreq !== undefined && this._mouseRealFreq !== null && Math.abs(this._mouseRealFreq - data.x) > 0.1;
     if(tipConfig.freq_visible){
       lines.push(`强度：${centtext}${this.options.yaxis.unit}`);
-      lines.push(`频率：${(data.x/1000000).toFixed(6)} MHz`);
-      // if(hasRealFreq){
-      //   const freqOffset = this._mouseRealFreq - data.x;
-      //   lines.push(`真实频率：${(this._mouseRealFreq/1000000).toFixed(6)} MHz`);
-      //   lines.push(`频偏：${(freqOffset/1000).toFixed(3)} kHz`);
-      // }
+      // 优先使用真实频率，若不可用时回退到线性插值频率
+      const displayFreq = hasRealFreq ? this._mouseRealFreq : data.x;
+      lines.push(`频率：${(displayFreq/1000000).toFixed(6)} MHz`);
     }else{
       lines.push(`强度：${centtext}${this.options.yaxis.unit}`);
     }
@@ -3566,6 +3793,7 @@ class sptmChart {
           }
           let initSpan=labelInfo.span;
           let newZoom=labelInfo.draw_zoom+delta;
+          if(newZoom<1)newZoom=1;
           let minSpan = 6;
           let zoomSpan = Math.max(minSpan, Math.floor(initSpan / newZoom));
           if(zoomSpan<=initSpan&&zoomSpan>=minSpan){
@@ -3648,6 +3876,7 @@ class sptmChart {
         }
         let initSpan=labelInfo.span;
         let newZoom=labelInfo.draw_zoom+delta;
+        if(newZoom<1)newZoom=1;
         let minSpan = 6;
         let zoomSpan = Math.max(minSpan, Math.floor(initSpan / newZoom));
         if(zoomSpan>initSpan)return false;
@@ -3665,6 +3894,15 @@ class sptmChart {
           minValue=Math.ceil(maxValue-zoomSpan);
         }
         if(minValue>=labelInfo.start_freq&&maxValue<=labelInfo.end_freq){
+          // dscan_merge_data 模式：缩放范围对齐到实际数据点，避免落在频段间隙
+          if(this.options.xaxis?.dscan_merge_data && this.tracesData.length>0){
+            const mergedDataInfo=this._getMergedDataInfo();
+            if(mergedDataInfo.hasRealFreq){
+              const freqs=mergedDataInfo.freqs;
+              minValue=freqs[this._findPointIndexByFreq(freqs, minValue)];
+              maxValue=freqs[this._findPointIndexByFreq(freqs, maxValue)];
+            }
+          }
           this.xLabelGridInfo[order].draw_zoom = newZoom;
           let newCenter=minValue+Math.floor((maxValue-minValue)/2);
           this.xLabelGridInfo[order].draw_zoom_freq =newCenter;
@@ -3697,6 +3935,27 @@ class sptmChart {
       y=this.options.yaxis.min_value;
     }else{
       y=this.options.yaxis.max_value-(pointy-this.options.grid.top)/this.chartHeight*(this.options.yaxis.max_value-this.options.yaxis.min_value);
+    }
+
+    // dscan_merge_data 合并模式：通过像素位置计算数据点索引，从 _freqs 获取真实频率
+    if(this.options.xaxis?.dscan_merge_data && this.xLabelGridInfo.length>0){
+      const labelInfo = this.xLabelGridInfo[0];
+      const mergedDataInfo = this._getMergedDataInfo();
+      if(mergedDataInfo.hasRealFreq && labelInfo.drawStepPx > 0){
+        const relativeX = pointx - this.options.grid.left - labelInfo.start_x;
+        let pointIndex = Math.round(relativeX / labelInfo.drawStepPx);
+        pointIndex = Math.max(0, Math.min(mergedDataInfo.totalPoints - 1, pointIndex));
+        x = mergedDataInfo.freqs[pointIndex];
+        order = 0;
+        
+        if(digit==0){
+          y=Math.floor(y);
+        }else{
+          y=parseFloat(y.toFixed(digit));
+        }
+        
+        return {x,y,order};
+      }
     }
 
     if(pointx<this.options.grid.left){

@@ -426,7 +426,7 @@ function debounce(fn, wait = 200) {
 
 /**
  * 节流函数（throttle）
- * 在固定时间间隔内只执行一次
+ * 在固定时间间隔内只执行一次，支持 trailing 模式
  * 适合：scroll、mousemove 等高频事件
  * @param {Function} fn 要执行的函数
  * @param {number} wait 等待时间（毫秒）
@@ -434,11 +434,34 @@ function debounce(fn, wait = 200) {
  */
 function throttle(fn, wait = 100) {
   let lastTime = 0;
+  let timer = null;
+  let lastArgs = null;
+
   return function (...args) {
     const now = Date.now();
-    if (now - lastTime >= wait) {
+    const remaining = wait - (now - lastTime);
+
+    if (remaining <= 0) {
+      // 到达等待时间，立即执行（leading edge）
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
       lastTime = now;
+      lastArgs = null;
       fn.apply(this, args);
+    } else if (!timer) {
+      // 在冷却期内，设置 trailing 定时器
+      lastArgs = args;
+      timer = setTimeout(() => {
+        lastTime = Date.now();
+        timer = null;
+        fn.apply(this, lastArgs);
+        lastArgs = null;
+      }, remaining);
+    } else {
+      // 冷却期内再次触发，更新最近一次参数
+      lastArgs = args;
     }
   };
 }
