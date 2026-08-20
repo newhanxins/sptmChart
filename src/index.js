@@ -10,7 +10,8 @@ import { Waterfall } from './module/Waterfall.js'
  */
 class sptmChart {
   constructor(id,options) {
-    this.devicePixelRatio = window.devicePixelRatio || 1;
+    // this.devicePixelRatio = window.devicePixelRatio || 1;
+    this.devicePixelRatio = 1;
     this.loadOptions=options;
     this.box = document.getElementById(id);
     this.box.style.position = "relative"
@@ -1957,7 +1958,7 @@ class sptmChart {
       saveDrawData = data.drawData.targetData;
       if(data._freqs && data._freqs.length > 0 && data.drawData.dataIndex){
         saveFreqs = data.drawData.dataIndex.map(idx => {
-          const midIdx = Math.round((idx[0] + idx[1]) / 2);
+          const midIdx = idx[0]; // 最大值索引
           return data._freqs[midIdx];
         });
       } else {
@@ -3105,7 +3106,7 @@ class sptmChart {
           }
         }
         this._mouseRealFreq = realFreq;
-        console.log(`[MouseMove] 位置:(${event.offsetX}, ${event.offsetY}), X轴频率: ${(mouseVal.x/1000000).toFixed(6)} MHz, 真实频率: ${(realFreq/1000000).toFixed(6)} MHz, 强度: ${intensity!==null?intensity.toFixed(2):'--'} dBμV`);
+        // console.log(`[MouseMove] 位置:(${event.offsetX}, ${event.offsetY}), X轴频率: ${(mouseVal.x/1000000).toFixed(6)} MHz, 真实频率: ${(realFreq/1000000).toFixed(6)} MHz, 强度: ${intensity!==null?intensity.toFixed(2):'--'} dBμV`);
         if(sourceInfo.length>0){
           //console.table(sourceInfo);
         }

@@ -10,8 +10,8 @@
 `sptmChart` 是一个基于 **HTML5 Canvas 2D** 的频谱图/瀑布图可视化组件库，用于频谱数据（FFT / DScan）的可视化呈现。
 
 ### 核心特性
-- **FFT 频谱线图**: 快速傅里叶变换频谱可视化，支持大数据量抽点优化
-- **DScan 频段扫描**: 多段频率数据分段显示
+- **FFT 单频模式**: 单频段快速傅里叶变换频谱可视化，支持大数据量抽点优化
+- **DScan 频段模式**: 多段非连续频率数据分段显示，支持频段合并与分界线绘制
 - **瀑布图 (Waterfall)**: 基于 Canvas ImageData 高性能像素绘制，支持 Jet 色系映射
 - **Marker 标记**: 可拖拽频谱标记，支持跟随谱线 Y 轴位置、自动吸附（吸附到最近/最大/最小数据点）
 - **交互操作**: 滚轮缩放、拖拽平移、选框、右键菜单、门限线拖拽、X/Y 轴范围变化回调
@@ -23,7 +23,7 @@
 ```
 sptmCharts/                          # 项目根目录
   src/
-    index.js              # 主类 sptmChart，核心绘图引擎（~3000 行）
+    index.js              # 主类 sptmChart，核心绘图引擎（~4827 行）
     index.css             # 基础样式（门限图标、弹窗样式）
     module/
       Waterfall.js        # 瀑布图/频谱图模块（~1000 行）
@@ -240,14 +240,14 @@ chart.setChartType('waterfall');            // 'line' | 'waterfall'
 - `draw_zoom` 仅同步 `draw_zoom_freq` 和 `draw_zoom_span`，**不可覆盖** `draw_zoom`（用户缩放等级）
 - 测试页面（`examples/index.html`）中根据当前显示范围在全量数据中查找索引并裁剪
 
-### 10.2 X轴缩放阈值配置（`x_zoom_threshold`）
+### 10.2 X轴缩放阈值配置（`zoom_threshold`）
 
-**配置项**：`options.xaxis.x_zoom_threshold`（默认值 **50**，单位 px）
+**配置项**：`options.xaxis.zoom_threshold`（默认值 **20**，单位 px）
 
-**作用**：放大时检查点间像素距离 `labelInfo.drawStepPx`，当 `drawStepPx > x_zoom_threshold` 时阻止继续放大，避免点太少出现"一条线"。
+**作用**：放大时检查点间像素距离 `labelInfo.drawStepPx`，当 `drawStepPx > zoom_threshold` 时阻止继续放大，避免点太少出现"一条线"。
 
 **注意**：
-- 字段使用下划线命名风格：`x_zoom_threshold`
+- 字段使用下划线命名风格：`zoom_threshold`（注意：不是 `x_zoom_threshold`）
 - 直接使用 `labelInfo.drawStepPx`（绘制时已计算），**不要**手动用 `_getDrawPointCount()` 重新计算
 - 逻辑为**大于阈值时阻止**，不是小于
 
